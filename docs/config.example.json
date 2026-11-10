@@ -1,0 +1,72 @@
+{
+  "desk": "your-github-login",
+  "aliases": [
+    "your-gitea-login"
+  ],
+  "owner": "Your Name",
+  "roles": [
+    "author",
+    "reviewer"
+  ],
+  "repos": [
+    {
+      "forge": "github",
+      "slug": "you/project"
+    },
+    {
+      "forge": "gitea",
+      "slug": "you/other-project"
+    }
+  ],
+  "people": [
+    "your-github-login",
+    "a-teammate"
+  ],
+  "areas": [
+    {
+      "name": "project",
+      "session": "project-reviewer",
+      "repos": [
+        "you/project"
+      ]
+    },
+    {
+      "name": "auth",
+      "session": "auth",
+      "repos": [
+        "you/other-project"
+      ],
+      "paths": [
+        "src/auth/"
+      ]
+    }
+  ],
+  "roundLimit": 3,
+  "intakeLabel": "agent-review",
+  "pollSeconds": 60,
+  "port": 4790,
+  "sidediff": {
+    "checkouts": {
+      "you/project": "/path/to/a/checkout/of/project"
+    }
+  },
+  "github": {
+    "api": "https://api.github.com",
+    "tokenCommand": [
+      "gh",
+      "auth",
+      "token"
+    ]
+  },
+  "gitea": {
+    "url": "https://gitea.example.com",
+    "tokenFile": "/path/to/gitea-token",
+    "discoverOwned": true
+  },
+  "machines": [
+    {
+      "label": "OTHER-MACHINE",
+      "seat": "other-machine"
+    }
+  ]
+}

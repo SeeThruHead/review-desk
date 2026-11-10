@@ -1,0 +1,11 @@
+node_modules/
+dist/
+target/
+.stylex/
+coverage/
+storybook-static/
+.moon/cache/
+*.tsbuildinfo
+
+# Tickets are kept locally, not published.
+.tickets/

@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "semi": false,
+  "trailingComma": "none",
+  "printWidth": 120,
+  "ignorePatterns": ["**/.tickets/**", "**/lint/fixtures/**", "spike/**", "**/.moon/cache/**", "**/storybook-static/**", "**/dist/**", "tray/**"]
+}

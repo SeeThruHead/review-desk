@@ -1,0 +1,23 @@
+[package]
+name = "review-desk-b"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[dependencies]
+axum = "0.8.9"
+futures-util = "0.3.34"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tao = "0.37.2"
+tokio = { version = "1.54.1", features = ["rt", "net", "time", "sync", "macros"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tray-icon = "0.26.1"

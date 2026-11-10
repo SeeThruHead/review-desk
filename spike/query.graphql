@@ -1,0 +1,18 @@
+query {
+  viewer { login }
+  search(query: "is:pr is:open involves:@me archived:false", type: ISSUE, first: 50) {
+    nodes {
+      ... on PullRequest {
+        id number title url headRefName isDraft mergeable reviewDecision updatedAt
+        repository { nameWithOwner }
+        author { login }
+        reviews(last: 30) { nodes { id state submittedAt body url author { login } } }
+        comments(last: 30) { nodes { id createdAt body url author { login } } }
+        reviewThreads(last: 50) {
+          nodes { path line isResolved comments(last: 20) { nodes { id createdAt body url author { login } } } }
+        }
+        latest: commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } }
+      }
+    }
+  }
+}

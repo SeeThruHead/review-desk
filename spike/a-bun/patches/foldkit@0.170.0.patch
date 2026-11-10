@@ -1,0 +1,14 @@
+diff --git a/dist/runtime/renderer.js b/dist/runtime/renderer.js
+index 573b77c26badff65fa5998751672aa9799b1b8c5..7ecd0ebc68ad7e1571eff12e3c97114012bd84af 100644
+--- a/dist/runtime/renderer.js
++++ b/dist/runtime/renderer.js
+@@ -136,6 +136,9 @@ export const makeRenderer = ({ status, container, view, htmlBuilder, manageDocum
+         if (status.isCrashed) {
+             return;
+         }
++        if (Cause.hasInterruptsOnly(cause)) {
++            return;
++        }
+         status.isCrashed = true;
+         // NOTE: the crash view should appear at once, not animate in from
+         // a snapshot of the state that crashed.

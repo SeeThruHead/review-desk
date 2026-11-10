@@ -1,0 +1,14 @@
+pre-commit:
+  commands:
+    affected:
+      run: bun run moon run :typecheck :lint :format --affected --concurrency 1
+
+commit-msg:
+  commands:
+    attribution:
+      run: bun packages/lint/tools/attribution-hook.ts {1}
+
+pre-push:
+  commands:
+    test:
+      run: nice -n 10 bun run moon run :test-logic --affected --concurrency 1

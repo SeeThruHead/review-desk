@@ -1,0 +1,6 @@
+$schema: https://moonrepo.dev/schemas/workspace.json
+versionConstraint: "=2.6.4"
+projects:
+  - packages/*
+vcs:
+  defaultBranch: main

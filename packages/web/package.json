@@ -1,0 +1,45 @@
+{
+  "name": "@review-desk/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "oxlint --type-aware --deny-warnings -c ../lint/oxlintrc.json src .storybook",
+    "test": "bun run test:logic && bun run test:components",
+    "test:logic": "bun --bun vitest run",
+    "test:components": "bun --bun vitest run --config vitest.components.config.ts",
+    "storybook": "storybook dev --port 6130 --no-open",
+    "storybook:build": "storybook build --output-dir storybook-static",
+    "build": "vite build",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "dependencies": {
+    "@foldkit/ui": "0.170.0",
+    "@review-desk/contract": "workspace:*",
+    "@review-desk/domain": "workspace:*",
+    "@seethruhead/sth-ui": "file:../../vendor/seethruhead-sth-ui-0.1.0.tgz",
+    "@stylexjs/stylex": "0.19.1",
+    "effect": "4.1.2",
+    "foldkit": "0.170.0"
+  },
+  "devDependencies": {
+    "@effect/tsgo": "0.64.1",
+    "@effect/vitest": "4.1.2",
+    "@storybook/addon-vitest": "10.6.2",
+    "@storybook/html-vite": "10.6.2",
+    "@stylexjs/unplugin": "0.19.1",
+    "@types/bun": "1.4.3",
+    "@vitest/browser": "5.0.5",
+    "@vitest/browser-playwright": "5.0.5",
+    "@vitest/coverage-istanbul": "5.0.5",
+    "oxfmt": "0.73.0",
+    "oxlint": "1.88.0",
+    "oxlint-tsgolint": "7.0.2004",
+    "playwright": "1.64.1",
+    "storybook": "10.6.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.5"
+  }
+}

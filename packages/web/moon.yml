@@ -1,0 +1,29 @@
+$schema: https://moonrepo.dev/schemas/project.json
+fileGroups:
+  upstream:
+    - /package.json
+    - /tsconfig.base.json
+    - /packages/contract/src/**/*
+    - /packages/domain/src/**/*
+    - /packages/lint/*.ts
+    - /packages/lint/oxlintrc.json
+tasks:
+  typecheck:
+    command: bun run typecheck
+    inputs: ["src/**/*", ".storybook/**/*", "*.ts", "tsconfig.json", "@group(upstream)"]
+  lint:
+    command: bun run lint
+    inputs: ["src/**/*", ".storybook/**/*", "@group(upstream)"]
+  test-logic:
+    command: bun run test:logic
+    inputs: ["src/**/*", "vitest.config.ts", "@group(upstream)"]
+  test-components:
+    command: bun run test:components
+    inputs: ["src/**/*", "vitest.components.config.ts", ".storybook/**/*", "sthUi.ts", "@group(upstream)"]
+  test:
+    deps: [test-logic, test-components]
+  format:
+    command: bun run format:check
+    inputs: ["**/*", /.oxfmtrc.json]
+  check:
+    deps: [typecheck, lint, format, test]

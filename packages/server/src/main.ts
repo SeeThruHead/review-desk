@@ -1,0 +1,230 @@
+import { BunRuntime, BunServices } from "@effect/platform-bun"
+import { CommentOutcome, DeskRpcs } from "@review-desk/contract/Contract.ts"
+import { Verdict } from "@review-desk/contract/Board.ts"
+import { Login, PrKey, RepoSlug, SessionName, Text } from "@review-desk/contract/Ids.ts"
+import { Cause, Config, Console, Effect, Layer, Option, Schema, Stream } from "effect"
+import { Argument, Command, Flag } from "effect/cli"
+import { FetchHttpClient } from "effect/http"
+import { RpcClient, RpcSerialization } from "effect/rpc"
+import { Agents } from "./agents/Agents.ts"
+import { DeskConfig } from "./config/DeskConfig.ts"
+import { Desk } from "./desk/Desk.ts"
+import { ForgesLive } from "./forge/Forges.ts"
+import { HttpLive } from "./http/Server.ts"
+import { Shell } from "./platform/Shell.ts"
+import { Database } from "./store/Database.ts"
+import { DeskRepo } from "./store/DeskRepo.ts"
+
+const DeskLive = Desk.layer.pipe(
+  Layer.provide([ForgesLive, Agents.layer, DeskRepo.layer]),
+  Layer.provide(Database),
+  Layer.provide([Shell.layer, FetchHttpClient.layer]),
+  Layer.provide(DeskConfig.layer)
+)
+
+const ServerLive = HttpLive.pipe(Layer.provide(DeskLive), Layer.provide(DeskConfig.layer))
+
+const ClientLive = Layer.unwrap(
+  Effect.gen(function* () {
+    const url = yield* Config.String("REVIEW_DESK_URL").pipe(Config.withDefault("http://127.0.0.1:4790"))
+
+    return RpcClient.layerProtocolHttp({ url: `${url}/rpc` })
+  })
+).pipe(Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]))
+
+const makeClient = RpcClient.make(DeskRpcs)
+
+const withDesk = <A, E>(use: (client: Effect.Success<typeof makeClient>) => Effect.Effect<A, E>) =>
+  Effect.scoped(Effect.flatMap(makeClient, use)).pipe(Effect.provide(ClientLive))
+
+const key = Argument.String("pull").pipe(
+  Argument.withDescription("The pull request or issue, as forge:owner/repo#number"),
+  Argument.withSchema(PrKey)
+)
+
+const serve = Command.make("serve", {}, () => Layer.launch(ServerLive)).pipe(
+  Command.withDescription("Run the desk: poll, route, deliver and serve the board")
+)
+
+const comment = Command.make(
+  "comment",
+  {
+    key,
+    body: Flag.String("body").pipe(Flag.withDescription("What to say")),
+    replyTo: Flag.String("reply-to").pipe(
+      Flag.withDescription("The comment id to answer in its thread"),
+      Flag.optional
+    ),
+    path: Flag.String("path").pipe(Flag.withDescription("File for a new inline comment"), Flag.optional),
+    line: Flag.Int("line").pipe(Flag.withDescription("Line for a new inline comment"), Flag.optional),
+    outcome: Flag.Literals("outcome", CommentOutcome.literals).pipe(
+      Flag.withDescription("Settle the thread"),
+      Flag.withDefault("open")
+    ),
+    close: Flag.Boolean("close").pipe(
+      Flag.withDescription("On an issue, close it after the comment"),
+      Flag.withDefault(false)
+    )
+  },
+  Effect.fn(function* (input) {
+    const posted = yield* withDesk((client) =>
+      client.PostComment({
+        key: input.key,
+        body: Text.make(input.body),
+        outcome: input.outcome,
+        replyTo: Option.getOrNull(Option.map(input.replyTo, Text.make)),
+        path: Option.getOrNull(Option.map(input.path, Text.make)),
+        line: Option.getOrNull(input.line),
+        close: input.close
+      })
+    )
+    yield* Console.log(`posted ${posted.url}`)
+  })
+).pipe(Command.withDescription("Post a comment through the desk, with the agent label and the round"))
+
+const triage = Command.make(
+  "triage",
+  {
+    key,
+    verdict: Flag.Literals("verdict", Verdict.literals).pipe(Flag.withDescription("architecture, look or skim")),
+    reason: Flag.String("reason").pipe(Flag.withDescription("One line for the person who reads it next"))
+  },
+  Effect.fn(function* (input) {
+    yield* withDesk((client) =>
+      client.ReportTriage({ key: input.key, verdict: input.verdict, reason: Text.make(input.reason), settled: [] })
+    )
+    yield* Console.log(`reported ${input.verdict} for ${input.key}`)
+  })
+).pipe(Command.withDescription("Report the review verdict for the human queue"))
+
+const claimPull = Effect.fnUntraced(function* (target: string, session: Option.Option<string>) {
+  const pull = yield* Schema.decodeEffect(PrKey)(target)
+  yield* withDesk((client) =>
+    client.Claim({ key: pull, session: Option.getOrNull(Option.map(session, SessionName.make)) })
+  )
+  yield* Console.log(`claimed ${pull}`)
+})
+
+type IssueClaimInput = {
+  readonly target: string
+  readonly from: ReadonlyArray<string>
+  readonly pane: Option.Option<string>
+  readonly machine: Option.Option<string>
+  readonly release: boolean
+}
+
+class NoAuthors extends Schema.TaggedError<NoAuthors, { readonly brand: unique symbol }>()("NoAuthors", {}) {
+  override get message() {
+    return "say whose issues to deliver: pass --from <login> at least once"
+  }
+}
+
+class NoPane extends Schema.TaggedError<NoPane, { readonly brand: unique symbol }>()("NoPane", {}) {
+  override get message() {
+    return "no pane: run this inside a Herdr pane, or pass --pane"
+  }
+}
+
+const paneOf = (input: IssueClaimInput) =>
+  Effect.flatMap(Config.option(Config.String("HERDR_PANE_ID")), (fromEnv) =>
+    Effect.fromOption(Option.orElse(input.pane, () => fromEnv)).pipe(Effect.mapError(() => new NoPane()))
+  )
+
+const claimIssues = Effect.fnUntraced(function* (input: IssueClaimInput) {
+  const repo = yield* Schema.decodeEffect(RepoSlug)(input.target)
+  const pane = yield* paneOf(input)
+  const machine = Option.getOrNull(input.machine)
+  const where = machine === null ? pane : `${pane} on ${machine}`
+  if (input.release) {
+    const done = yield* withDesk((client) => client.ReleaseIssues({ repo, machine, pane }))
+
+    return yield* Console.log(`released ${done.released} issue claim(s) on ${repo} for ${where}`)
+  }
+  const from = yield* Schema.decodeUnknownEffect(Schema.NonEmptyArray(Login))(input.from).pipe(
+    Effect.mapError(() => new NoAuthors())
+  )
+  const claimed = yield* withDesk((client) => client.ClaimIssues({ repo, from, machine, pane }))
+  yield* Console.log(`watching ${repo} issues on ${claimed.forges.join(" and ")} from ${from.join(", ")} for ${where}`)
+})
+
+const claim = Command.make(
+  "claim",
+  {
+    target: Argument.String("target").pipe(
+      Argument.withDescription("A pull request as forge:owner/repo#number, or with --issues a repository as owner/repo")
+    ),
+    session: Flag.String("session").pipe(Flag.withDescription("Herdr agent to hand a pull request to"), Flag.optional),
+    issues: Flag.Boolean("issues").pipe(
+      Flag.withDescription("Claim the repository's issues for this pane"),
+      Flag.withDefault(false)
+    ),
+    from: Flag.String("from").pipe(
+      Flag.withDescription("Author whose issues and comments reach the pane (repeat for more)"),
+      Flag.atLeast(0)
+    ),
+    pane: Flag.String("pane").pipe(
+      Flag.withDescription("Herdr pane to deliver to (default $HERDR_PANE_ID)"),
+      Flag.optional
+    ),
+    machine: Flag.String("machine").pipe(
+      Flag.withDescription("Herdr machine label of that pane when it is on another machine, such as devbox"),
+      Flag.optional
+    ),
+    release: Flag.Boolean("release").pipe(
+      Flag.withDescription("With --issues, stop watching the repository's issues"),
+      Flag.withDefault(false)
+    )
+  },
+  Effect.fn(function* (input) {
+    if (input.issues) return yield* claimIssues(input)
+
+    return yield* claimPull(input.target, input.session)
+  })
+).pipe(Command.withDescription("Claim a pull request for an agent to review, or a repository's issues for this pane"))
+
+const sketchybar = Command.make(
+  "sketchybar",
+  {},
+  Effect.fn(function* () {
+    const shell = yield* Shell
+    const trigger = (summary: { readonly ready: number; readonly working: number; readonly talking: number }) =>
+      shell
+        .run("sketchybar", [
+          "--trigger",
+          "review_desk_update",
+          `READY=${summary.ready}`,
+          `WORKING=${summary.working}`,
+          `TALKING=${summary.talking}`
+        ])
+        .pipe(Effect.ignore)
+    yield* shell.run("sketchybar", ["--add", "event", "review_desk_update"]).pipe(Effect.ignore)
+    yield* withDesk((client) => client.WatchSummary().pipe(Stream.runForEach(trigger)))
+  }, Effect.provide(Shell.layer))
+).pipe(Command.withDescription("Keep SketchyBar's review_desk_update event fed with the counts"))
+
+const summary = Command.make("summary", {}, () =>
+  withDesk((client) =>
+    client.WatchSummary().pipe(
+      Stream.take(1),
+      Stream.runForEach((value) => Console.log(JSON.stringify(value)))
+    )
+  )
+).pipe(Command.withDescription("Print the counts once"))
+
+const cli = Command.make("review-desk").pipe(
+  Command.withDescription("Agents do the first review rounds; you get a queue of what needs a person"),
+  Command.withSubcommands([serve, comment, triage, claim, sketchybar, summary])
+)
+
+const messageOf = (cause: Cause.Cause<unknown>): string =>
+  Option.match(Cause.findErrorOption(cause), {
+    onNone: () => Cause.pretty(cause),
+    onSome: (error) => (error instanceof Error && error.message.length > 0 ? error.message : Cause.pretty(cause))
+  })
+
+cli.pipe(
+  Command.run({ version: "0.1.0" }),
+  Effect.tapCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Console.error(messageOf(cause)))),
+  Effect.provide(BunServices.layer),
+  BunRuntime.runMain
+)

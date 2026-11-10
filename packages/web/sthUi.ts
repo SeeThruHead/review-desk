@@ -8,7 +8,6 @@ export const sthUiVite: UserConfig = {
   plugins: [
     stylex({
       devMode: "full",
-      enableMediaQueryOrder: false,
       unstable_moduleResolution: { type: "commonJS", rootDir: repoRoot }
     })
   ],

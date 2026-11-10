@@ -29,7 +29,7 @@ export const targetFor = (
   name: string,
   agents: ReadonlyArray<{ readonly name: string; readonly pane: string; readonly machine: string | null }>
 ): AgentTarget => {
-  const found = agents.find((agent) => agent.name === name)
+  const found = agents.find((agent) => agent.name === name || agent.pane === name)
 
   return found === undefined ? { machine: null, pane: name } : { machine: found.machine, pane: found.pane }
 }

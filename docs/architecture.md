@@ -78,7 +78,9 @@ The config lists the repositories and the people the desk trusts. Nothing from a
 1. Read every configured repository's open and recently merged pull requests (GitHub GraphQL, Gitea REST).
 2. List the agents in Herdr, with each one's directory, branch and remote.
 3. Plan (`Plan.ts`, pure): the board, which new requests to route to which session, which new comments to deliver to which agent, and what to mark as seen.
-4. Carry out the plan: prompt agents through `herdr agent prompt`, record claims and seen comments in SQLite.
+4. Carry out the plan: prompt agents in whichever terminal they run, record claims and seen comments in SQLite.
+
+Agents are found in every terminal host on the desk's machine, each asked only when its CLI answers, so several can run at once (`agents/Agents.ts`, parsers in `agents/Terminals.ts`): the Herdr TUI (`herdr agent list` / `herdr agent prompt`, plus `--machine` for linked machines), the Herdr app (`hc ls --json` / `hc send --if idle`), cmux, Orca, tmux panes running a known agent command, and Claude Code sessions with no terminal of their own (through the session's inbox socket). A target is an address: a Herdr pane id as it is, or `hc:<t>`, `cmux:<id>`, `orca:<id>`, `tmux:<pane>`, `claude:<session>` (`agents/Address.ts`). `review-desk claim` defaults to the caller's own terminal from `HERDR_PANE_ID`, `HC_TERMINAL_ID`, `CMUX_WORKSPACE_ID`, `ORCA_TERMINAL_HANDLE`, `TMUX_PANE` or the Claude Code session, in that order.
 5. Publish the new board to every open page, the tray and SketchyBar over the RPC stream.
 
 Routing picks the first area in the config whose repositories (and, if given, paths) match. Your own pull requests' updates go to whichever agent is on that branch of that repository, as in prwatch. The first time a pull request is seen, its existing comments are recorded without being delivered.

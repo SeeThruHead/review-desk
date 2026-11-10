@@ -16,6 +16,8 @@ export default defineConfig({
         "src/desk/IssueWatch.ts",
         "src/desk/Repos.ts",
         "src/agents/Remote.ts",
+        "src/agents/Address.ts",
+        "src/agents/Terminals.ts",
         "src/store/DeskRepo.ts"
       ],
       reporter: ["text-summary", "text"],

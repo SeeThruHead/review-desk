@@ -82,6 +82,9 @@ const remoteMatches = (agent: LiveAgent, pull: PullFacts): boolean =>
 const onBranch = (agent: LiveAgent, pull: PullFacts): boolean =>
   remoteMatches(agent, pull) && Option.getOrElse(agent.branch, () => "") === pull.head
 
+const answersTo = (agent: LiveAgent, session: string | undefined): boolean =>
+  agent.name === session || agent.pane === session
+
 export const agentFor = (
   pull: PullFacts,
   role: Role,
@@ -91,7 +94,7 @@ export const agentFor = (
   if (role === "author") return agents.find((agent) => onBranch(agent, pull))
   const session = records.claims.get(pull.key)
 
-  return agents.find((agent) => agent.name === session)
+  return agents.find((agent) => answersTo(agent, session))
 }
 
 const cardAgent = (pull: PullFacts, role: Role, records: Records, agents: ReadonlyArray<LiveAgent>): Agent | null => {

@@ -26,7 +26,7 @@ A `[review-desk]` message is the person's standing direction for that one pull r
 
 ## Issues you claimed
 
-- To have a repository's issues handed to you, claim them from your pane, naming whose issues count: `review-desk claim <owner/repo> --issues --from <login>` (repeat `--from` for more authors). It reads `$HERDR_PANE_ID`. Issues and comments from anyone not named are never delivered.
+- To have a repository's issues handed to you, claim them from your terminal, naming whose issues count: `review-desk claim <owner/repo> --issues --from <login>` (repeat `--from` for more authors). It finds your terminal by itself in a Herdr pane, a Herdr app terminal, cmux, Orca, tmux or a Claude Code session; `--pane` names another (`hc:t11` for an app terminal). `review-desk claim <forge:owner/repo#n>` claims a pull request for your terminal the same way. Issues and comments from anyone not named are never delivered.
 - The desk runs on one machine. From a pane on another machine, run the command on the desk's machine (for example `sth-seat run <desk machine> -n -- review-desk claim <owner/repo> --issues --from <login> --pane "$HERDR_PANE_ID" --machine <your Herdr machine label>`) and say which Herdr machine you are on with `--machine`. Every other `review-desk` command goes the same way.
 - `[review-desk] <forge:owner/repo#n> "<title>" (<link>) has updates:` brings a new issue or new comments from those authors, with their full text. The first look after a claim delivers nothing: only what is opened or commented on after it.
 - Issues from a Codex review (the "Codex findings on main" issue a review bot keeps per repository) come first: when one arrives, finish or park what you are doing and work its findings before anything else, then answer and close it.

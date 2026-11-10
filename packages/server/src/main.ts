@@ -2,11 +2,13 @@ import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { CommentOutcome, DeskRpcs } from "@review-desk/contract/Contract.ts"
 import { Verdict } from "@review-desk/contract/Board.ts"
 import { Login, PrKey, RepoSlug, SessionName, Text } from "@review-desk/contract/Ids.ts"
-import { Cause, Config, Console, Effect, Layer, Option, Schema, Stream } from "effect"
+import { Cause, Config, Console, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { FetchHttpClient } from "effect/http"
 import { RpcClient, RpcSerialization } from "effect/rpc"
+import { callerAddress } from "./agents/Address.ts"
 import { Agents } from "./agents/Agents.ts"
+import { ClaudeSession } from "./agents/Terminals.ts"
 import { DeskConfig } from "./config/DeskConfig.ts"
 import { Desk } from "./desk/Desk.ts"
 import { ForgesLive } from "./forge/Forges.ts"
@@ -97,12 +99,57 @@ const triage = Command.make(
   })
 ).pipe(Command.withDescription("Report the review verdict for the human queue"))
 
+const envOption = (name: string) => Config.option(Config.String(name))
+
+const claudeSessionOf = (socket: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const home = yield* Config.String("HOME").pipe(Config.withDefault("."))
+    const claudeHome = yield* Config.String("CLAUDE_CONFIG_DIR").pipe(Config.withDefault(path.join(home, ".claude")))
+    const directory = path.join(claudeHome, "sessions")
+    const files = yield* fs.readDirectory(directory)
+    const read = (file: string) =>
+      fs
+        .readFileString(path.join(directory, file))
+        .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(ClaudeSession))), Effect.option)
+    const sessions = yield* Effect.forEach(
+      files.filter((file) => file.endsWith(".json")),
+      read,
+      { concurrency: 8 }
+    )
+
+    return Option.map(
+      Option.fromNullishOr(sessions.flatMap(Option.toArray).find((session) => session.messagingSocketPath === socket)),
+      (session) => session.sessionId
+    )
+  }).pipe(Effect.orElseSucceed(() => Option.none<string>()))
+
+const callerTerminal = Effect.gen(function* () {
+  const socket = yield* envOption("CLAUDE_CODE_MESSAGING_SOCKET")
+  const claudeSession = yield* Option.match(socket, {
+    onNone: () => Effect.succeed(Option.none<string>()),
+    onSome: claudeSessionOf
+  })
+
+  return callerAddress({
+    herdrPane: yield* envOption("HERDR_PANE_ID"),
+    appTerminal: yield* envOption("HC_TERMINAL_ID"),
+    cmuxWorkspace: yield* envOption("CMUX_WORKSPACE_ID"),
+    orcaTerminal: yield* envOption("ORCA_TERMINAL_HANDLE"),
+    tmuxPane: yield* envOption("TMUX_PANE"),
+    claudeSession
+  })
+})
+
 const claimPull = Effect.fnUntraced(function* (target: string, session: Option.Option<string>) {
   const pull = yield* Schema.decodeEffect(PrKey)(target)
+  const caller = yield* callerTerminal
+  const chosen = Option.orElse(session, () => caller)
   yield* withDesk((client) =>
-    client.Claim({ key: pull, session: Option.getOrNull(Option.map(session, SessionName.make)) })
+    client.Claim({ key: pull, session: Option.getOrNull(Option.map(chosen, SessionName.make)) })
   )
-  yield* Console.log(`claimed ${pull}`)
+  yield* Console.log(`claimed ${pull}${Option.match(chosen, { onNone: () => "", onSome: (who) => ` for ${who}` })}`)
 })
 
 type IssueClaimInput = {
@@ -121,12 +168,12 @@ class NoAuthors extends Schema.TaggedError<NoAuthors, { readonly brand: unique s
 
 class NoPane extends Schema.TaggedError<NoPane, { readonly brand: unique symbol }>()("NoPane", {}) {
   override get message() {
-    return "no pane: run this inside a Herdr pane, or pass --pane"
+    return "no terminal: run this in a Herdr pane, a Herdr app terminal, cmux, Orca, tmux or Claude Code, or pass --pane"
   }
 }
 
 const paneOf = (input: IssueClaimInput) =>
-  Effect.flatMap(Config.option(Config.String("HERDR_PANE_ID")), (fromEnv) =>
+  Effect.flatMap(callerTerminal, (fromEnv) =>
     Effect.fromOption(Option.orElse(input.pane, () => fromEnv)).pipe(Effect.mapError(() => new NoPane()))
   )
 
@@ -153,7 +200,12 @@ const claim = Command.make(
     target: Argument.String("target").pipe(
       Argument.withDescription("A pull request as forge:owner/repo#number, or with --issues a repository as owner/repo")
     ),
-    session: Flag.String("session").pipe(Flag.withDescription("Herdr agent to hand a pull request to"), Flag.optional),
+    session: Flag.String("session").pipe(
+      Flag.withDescription(
+        "Agent to hand a pull request to: a Herdr agent name or a terminal address (default: this terminal)"
+      ),
+      Flag.optional
+    ),
     issues: Flag.Boolean("issues").pipe(
       Flag.withDescription("Claim the repository's issues for this pane"),
       Flag.withDefault(false)
@@ -163,7 +215,9 @@ const claim = Command.make(
       Flag.atLeast(0)
     ),
     pane: Flag.String("pane").pipe(
-      Flag.withDescription("Herdr pane to deliver to (default $HERDR_PANE_ID)"),
+      Flag.withDescription(
+        "Terminal to deliver to: a Herdr pane, or hc:<t>, cmux:<id>, orca:<id>, tmux:<pane>, claude:<session> (default: this terminal)"
+      ),
       Flag.optional
     ),
     machine: Flag.String("machine").pipe(

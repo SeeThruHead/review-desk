@@ -13,7 +13,7 @@ Each command is a package script; moon wraps them with inputs for caching. Run t
 - In `tray`: `cargo build --release`, `cargo test`.
 - Tickets: `tk ready`, ids `rd-xxxx`.
 
-sth-ui is the one package `@seethruhead/sth-ui`, built from github.com/SeeThruHead/sth-ui. Until it is on npm, `packages/web` installs a release tarball kept in `vendor/`; moving to a newer sth-ui is a deliberate version bump. `packages/web/sthUi.ts` holds the StyleX setup that compiles sth-ui's styles with the app's.
+sth-ui is the one package `@seethruhead/sth-ui` from npm (source github.com/SeeThruHead/sth-ui). `packages/web` pins an exact release; moving to a newer sth-ui is a deliberate version bump. `packages/web/sthUi.ts` holds the StyleX setup that compiles sth-ui's styles with the app's.
 
 ## How it starts
 

@@ -96,7 +96,7 @@
         "@foldkit/ui": "0.170.0",
         "@review-desk/contract": "workspace:*",
         "@review-desk/domain": "workspace:*",
-        "@seethruhead/sth-ui": "file:../../vendor/seethruhead-sth-ui-0.1.0.tgz",
+        "@seethruhead/sth-ui": "0.3.0",
         "@stylexjs/stylex": "0.19.1",
         "effect": "4.1.2",
         "foldkit": "0.170.0",
@@ -513,7 +513,7 @@
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
 
-    "@seethruhead/sth-ui": ["@seethruhead/sth-ui@../../vendor/seethruhead-sth-ui-0.1.0.tgz", { "dependencies": { "@foldkit/ui": "0.170.0", "@stylexjs/stylex": "0.19.1", "@tiptap/core": "3.33.0", "@tiptap/pm": "3.33.0", "effect": "4.1.2", "foldkit": "0.170.0", "rrule": "2.8.1" } }, "sha512-daNW+YVi+hLLUFydcvyQ4w2TVK99pvoG461LXQI1oxrecDQjUbZHrmTO1epVU+5o6e8vApkb7FkgBF32ON7YrQ=="],
+    "@seethruhead/sth-ui": ["@seethruhead/sth-ui@0.3.0", "", { "dependencies": { "@foldkit/ui": "0.170.0", "@stylexjs/stylex": "0.19.1", "@tiptap/core": "3.33.0", "@tiptap/pm": "3.33.0", "effect": "4.1.2", "foldkit": "0.170.0", "rrule": "2.8.1" } }, "sha512-MIyVF9rTQHs+Yu0VQTpz7RQBnm9UGEBMnbonPMxx01aOx19VRwvcMdwJejeJjKYFW3dAuIzpQU9QyJte45mJhQ=="],
 
     "@storybook/addon-vitest": ["@storybook/addon-vitest@10.6.2", "", { "dependencies": { "@storybook/global": "^5.0.0", "@storybook/icons": "^2.0.2" }, "peerDependencies": { "@vitest/browser": "^3.0.0 || ^4.0.0 || ^5.0.0", "@vitest/browser-playwright": "^4.0.0 || ^5.0.0", "@vitest/runner": "^3.0.0 || ^4.0.0 || ^5.0.0", "storybook": "^10.6.2", "vitest": "^3.0.0 || ^4.0.0 || ^5.0.0" }, "optionalPeers": ["@vitest/browser", "@vitest/browser-playwright", "@vitest/runner", "vitest"] }, "sha512-gyyBzncvUyEgWQR3LinnGuI4UsWIUYLyw1u8i244aTxmY4uxCYjsDmUNkaSr8xQzNz8nh2Ckh3G4bO4SvJ6nJQ=="],
 

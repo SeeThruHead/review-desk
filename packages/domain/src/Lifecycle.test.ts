@@ -139,9 +139,7 @@ describe("where a pull request sits on the board", () => {
     expect(cardOf(pull(1, { reviews: [review(lee, "changes_requested", "No")] }), desk, triaged).stage).toBe(
       "reviewing"
     )
-    expect(cardOf(pull(1, { reviews: [review(lee, "commented", "Thoughts")] }), desk, authoring).stage).toBe(
-      "reviewed"
-    )
+    expect(cardOf(pull(1, { reviews: [review(lee, "commented", "Thoughts")] }), desk, authoring).stage).toBe("reviewed")
     expect(cardOf(pull(1, { reviews: [review(lee, "commented", "  ")] }), desk, authoring).stage).toBe("waiting")
     expect(cardOf(pull(1, { state: "merged" }), desk, authoring).stage).toBe("merged")
     expect(

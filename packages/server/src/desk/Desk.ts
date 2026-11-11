@@ -33,12 +33,14 @@ import {
   DateTime,
   Duration,
   Effect,
+  Equivalence,
   Layer,
   Option,
   Ref,
   Schedule,
   Semaphore,
   Stream,
+  Struct,
   SubscriptionRef
 } from "effect"
 import { Agents, type LiveAgent } from "../agents/Agents.ts"
@@ -92,6 +94,10 @@ const jobsFor =
 
 const placeOf = (target: AgentTarget): string =>
   target.machine === null ? target.pane : `${target.pane} on ${target.machine}`
+
+const sameCount = Equivalence.strictEqual<Count>()
+
+const sameSummary = Struct.makeEquivalence({ ready: sameCount, working: sameCount, talking: sameCount })
 
 export const summaryOf = (board: Board): Summary => ({
   ready: Count.make(board.ready.length),
@@ -480,10 +486,7 @@ export class Desk extends Context.Service<
 
       return Desk.of({
         board,
-        summary: board.pipe(
-          Stream.map(summaryOf),
-          Stream.changesWith((a, b) => JSON.stringify(a) === JSON.stringify(b))
-        ),
+        summary: board.pipe(Stream.map(summaryOf), Stream.changesWith(sameSummary)),
         refresh,
         reportTriage,
         claim,

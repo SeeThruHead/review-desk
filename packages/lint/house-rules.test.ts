@@ -16,6 +16,8 @@ const Report = Schema.fromJsonString(
 const expected = [
   "casts.ts house(no-casts) 1",
   "comments.ts house(no-comments) 1",
+  "deterministic.ts effecttsgo(global-date) 1",
+  "deterministic.ts effecttsgo(global-random) 2",
   "deterministic.ts house(deterministic) 1",
   "deterministic.ts house(deterministic) 2",
   "gen-wrapper.ts house(no-gen-wrapper) 2",
@@ -44,13 +46,25 @@ const textOf = (stream: ReadableStream<Uint8Array>) => Effect.promise(() => new 
 
 const lintFixtures = Effect.gen(function* () {
   const child = Bun.spawn(
-    ["./node_modules/.bin/oxlint", "--no-ignore", "-c", "fixtures.oxlintrc.json", "-f", "json", "fixtures"],
+    [
+      "./node_modules/.bin/effect-tsgo",
+      "--tsrs-lint",
+      "oxlint",
+      "--no-ignore",
+      "-c",
+      "fixtures.oxlintrc.json",
+      "-f",
+      "json",
+      "fixtures"
+    ],
     { stdout: "pipe", stderr: "pipe" }
   )
   const [stdout, stderr] = yield* Effect.all([textOf(child.stdout), textOf(child.stderr)])
 
   return yield* Schema.decodeEffect(Report)(stdout).pipe(
-    Effect.mapError(() => new NoReport({ hint: "oxlint printed no report; run `bun run setup` to patch it", stderr }))
+    Effect.mapError(
+      () => new NoReport({ hint: "oxlint printed no report through effect-tsgo; run `bun install`", stderr })
+    )
   )
 })
 

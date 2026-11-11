@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
+import { Schema } from "effect"
 import {
+  InboxLine,
   appAgents,
   bracketed,
   claudeAgents,
@@ -109,7 +111,10 @@ describe("Claude Code sessions with no terminal of their own", () => {
   })
 
   it("writes a message as one user line for the session's inbox", () => {
-    expect(JSON.parse(inboxLine("hello"))).toEqual({ type: "user", message: { role: "user", content: "hello" } })
+    expect(Schema.decodeSync(Schema.fromJsonString(InboxLine))(inboxLine("hello"))).toEqual({
+      type: "user",
+      message: { role: "user", content: "hello" }
+    })
     expect(inboxLine("x").endsWith("\n")).toBe(true)
   })
 })

@@ -1,5 +1,5 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun"
-import { CommentOutcome, DeskRpcs } from "@review-desk/contract/Contract.ts"
+import { CommentOutcome, DeskRpcs, Summary } from "@review-desk/contract/Contract.ts"
 import { Verdict } from "@review-desk/contract/Board.ts"
 import { Login, PrKey, RepoSlug, SessionName, Text } from "@review-desk/contract/Ids.ts"
 import { Cause, Config, Console, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
@@ -256,11 +256,13 @@ const sketchybar = Command.make(
   }, Effect.provide(Shell.layer))
 ).pipe(Command.withDescription("Keep SketchyBar's review_desk_update event fed with the counts"))
 
+const SummaryJson = Schema.fromJsonString(Summary)
+
 const summary = Command.make("summary", {}, () =>
   withDesk((client) =>
     client.WatchSummary().pipe(
       Stream.take(1),
-      Stream.runForEach((value) => Console.log(JSON.stringify(value)))
+      Stream.runForEach((value) => Schema.encodeEffect(SummaryJson)(value).pipe(Effect.flatMap(Console.log)))
     )
   )
 ).pipe(Command.withDescription("Print the counts once"))

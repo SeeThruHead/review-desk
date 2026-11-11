@@ -136,8 +136,15 @@ export const claudeAgents = (
       working: session.status === "busy" || session.status === "working"
     }))
 
+export const InboxLine = Schema.Struct({
+  type: Schema.Literal("user"),
+  message: Schema.Struct({ role: Schema.Literal("user"), content: Schema.String })
+})
+
+const inboxJson = Schema.encodeSync(Schema.fromJsonString(InboxLine))
+
 export const inboxLine = (text: string): string =>
-  `${JSON.stringify({ type: "user", message: { role: "user", content: text } })}\n`
+  `${inboxJson({ type: "user", message: { role: "user", content: text } })}\n`
 
 const pasteStart = "\u001b[200~"
 const pasteEnd = "\u001b[201~"

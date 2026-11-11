@@ -277,7 +277,7 @@ const messageOf = (cause: Cause.Cause<unknown>): string =>
   })
 
 cli.pipe(
-  Command.run({ version: "0.1.0" }),
+  Command.run({ version: "0.1.1" }),
   Effect.tapCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Console.error(messageOf(cause)))),
   Effect.provide(BunServices.layer),
   BunRuntime.runMain

@@ -4,6 +4,7 @@ import {
   bracketed,
   claudeAgents,
   cmuxAgent,
+  connectedMachines,
   inboxLine,
   orcaAgents,
   sidebarFields,
@@ -21,12 +22,38 @@ describe("agents in the Herdr app", () => {
         { address: "t3", agent: null, cwd: "/w/shell", state: "live", status: null },
         { address: "t6", agent: "codex", cwd: "/w/x" },
         { address: "t4", agent: "codex", cwd: "/w/old", state: "finished", status: "done" },
-        { address: "t5", agent: "codex", cwd: null, state: "live" }
+        { address: "t5", agent: "codex", cwd: null, state: "live", status: "idle" },
+        { address: "devbox/t8", agent: "codex", cwd: "/w/remote", state: "live", status: "idle" }
       ])
     ).toEqual([
       { pane: "hc:t11", cwd: "/w/api", working: true },
       { pane: "hc:t1", cwd: "/w/web", working: false }
     ])
+  })
+
+  it("names a terminal by its app name, skips a plain shell, and qualifies another machine's address", () => {
+    expect(
+      appAgents(
+        [
+          { address: "t2b", name: "ui-kit", agent: "claude-code", cwd: "/w/ui", state: "live", status: "idle" },
+          { address: "t20", name: "seat-check", agent: "zsh", cwd: "/w/x", state: "live" },
+          { address: "t9", name: null, agent: "codex", cwd: "/w/api", state: "live", status: "done" }
+        ],
+        "devbox"
+      )
+    ).toEqual([
+      { pane: "hc:devbox/t2b", cwd: "/w/ui", working: false, name: "ui-kit" },
+      { pane: "hc:devbox/t9", cwd: "/w/api", working: false }
+    ])
+  })
+
+  it("keeps the linked machines that are connected", () => {
+    expect(
+      connectedMachines([
+        { name: "devbox", state: "connected" },
+        { name: "laptop", state: "disconnected" }
+      ])
+    ).toEqual(["devbox"])
   })
 })
 

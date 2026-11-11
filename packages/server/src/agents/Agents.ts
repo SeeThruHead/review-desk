@@ -6,12 +6,14 @@ import { type CommandFailed, Shell } from "../platform/Shell.ts"
 import { parseAddress } from "./Address.ts"
 import { type AgentTarget, type Location, locateScript, parseLocations } from "./Remote.ts"
 import {
+  AppMachines,
   AppTerminals,
   ClaudeSession,
   CmuxWorkspaces,
   type Found,
   OrcaTerminals,
   appAgents,
+  connectedMachines,
   bracketed,
   claudeAgents,
   cmuxAgent,
@@ -61,7 +63,7 @@ const shape = (found: Named, machine: string | null, where: Location): LiveAgent
   remote: where.remote
 })
 
-const named = (found: Found): Named => ({ ...found, name: found.pane })
+const named = (found: Found): Named => ({ ...found, name: found.name ?? found.pane })
 
 export class AgentsUnavailable extends Schema.TaggedError<AgentsUnavailable, { readonly brand: unique symbol }>()(
   "AgentsUnavailable",
@@ -234,8 +236,41 @@ export class Agents extends Context.Service<
         { concurrency: 2 }
       )
 
-      const list = Effect.all([here, elsewhere], { concurrency: 2 }).pipe(
-        Effect.map(([local, remote]) => [...local, ...remote.flat()]),
+      const locateOn = (machine: string, cwds: ReadonlyArray<string>) =>
+        cwds.length === 0
+          ? Effect.succeed("")
+          : shell.run("hc", ["exec", "--on", machine, "sh", "-c", locateScript(cwds)])
+
+      const appThere = Effect.fnUntraced(function* (machine: string) {
+        const { terminals } = yield* shell
+          .run("hc", ["exec", "--on", machine, "hc", "ls", "--json"])
+          .pipe(decodeJson(AppTerminals))
+        const found = appAgents(terminals, machine)
+        const located = yield* locateOn(machine, [...new Set(found.map((agent) => agent.cwd))])
+        const where = parseLocations(located)
+
+        return found.map((agent) => shape(named(agent), machine, where.get(agent.cwd) ?? nowhere))
+      })
+
+      const appElsewhere = shell.run("hc", ["machine", "ls"]).pipe(
+        decodeJson(AppMachines),
+        Effect.map(({ machines }) => connectedMachines(machines)),
+        Effect.orElseSucceed((): ReadonlyArray<string> => []),
+        Effect.flatMap((machines) =>
+          Effect.forEach(
+            machines,
+            (machine) =>
+              appThere(machine).pipe(
+                Effect.tapError((error) => Effect.logWarning(`app agents on ${machine}: ${error.message}`)),
+                Effect.orElseSucceed((): ReadonlyArray<LiveAgent> => [])
+              ),
+            { concurrency: 2 }
+          )
+        )
+      )
+
+      const list = Effect.all([here, elsewhere, appElsewhere], { concurrency: 3 }).pipe(
+        Effect.map(([local, remote, remoteApp]) => [...local, ...remote.flat(), ...remoteApp.flat()]),
         Effect.withSpan("Agents.list")
       )
 

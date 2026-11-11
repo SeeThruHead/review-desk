@@ -4,10 +4,12 @@ export type Found = {
   readonly pane: string
   readonly cwd: string
   readonly working: boolean
+  readonly name?: string
 }
 
 export const AppTerminal = Schema.Struct({
   address: Schema.String,
+  name: Schema.optionalKey(Schema.NullOr(Schema.String)),
   agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
   cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   state: Schema.optionalKey(Schema.String),
@@ -16,17 +18,38 @@ export const AppTerminal = Schema.Struct({
 
 export const AppTerminals = Schema.Struct({ terminals: Schema.Array(AppTerminal) })
 
-const appAgent = (terminal: typeof AppTerminal.Type): ReadonlyArray<Found> => {
-  if (!terminal.agent) return []
-  if (terminal.agent.endsWith("-asleep")) return []
-  if (terminal.state !== "live") return []
-  if (!terminal.cwd) return []
+export const AppMachines = Schema.Struct({
+  machines: Schema.Array(Schema.Struct({ name: Schema.String, state: Schema.String }))
+})
 
-  return [{ pane: `hc:${terminal.address}`, cwd: terminal.cwd, working: terminal.status === "working" }]
-}
+export const connectedMachines = (machines: (typeof AppMachines.Type)["machines"]): ReadonlyArray<string> =>
+  machines.filter((machine) => machine.state === "connected").map((machine) => machine.name)
 
-export const appAgents = (terminals: ReadonlyArray<typeof AppTerminal.Type>): ReadonlyArray<Found> =>
-  terminals.flatMap(appAgent)
+const appAgent =
+  (machine: string | null) =>
+  (terminal: typeof AppTerminal.Type): ReadonlyArray<Found> => {
+    if (!terminal.agent) return []
+    if (!terminal.status) return []
+    if (terminal.agent.endsWith("-asleep")) return []
+    if (terminal.state !== "live") return []
+    if (!terminal.cwd) return []
+    if (machine === null && terminal.address.includes("/")) return []
+    const address = machine === null ? terminal.address : `${machine}/${terminal.address}`
+
+    return [
+      {
+        pane: `hc:${address}`,
+        cwd: terminal.cwd,
+        working: terminal.status === "working",
+        ...(terminal.name ? { name: terminal.name } : {})
+      }
+    ]
+  }
+
+export const appAgents = (
+  terminals: ReadonlyArray<typeof AppTerminal.Type>,
+  machine: string | null = null
+): ReadonlyArray<Found> => terminals.flatMap(appAgent(machine))
 
 export const CmuxWorkspaces = Schema.Struct({ workspaces: Schema.Array(Schema.Struct({ id: Schema.String })) })
 

@@ -293,7 +293,7 @@ export class Agents extends Context.Service<
         const machine = target.machine === null ? [] : ["--machine", target.machine]
         if (address.host === "herdr")
           return yield* run(target, "herdr", [...machine, "agent", "prompt", address.id, text])
-        if (address.host === "hc") return yield* run(target, "hc", ["send", "--if", "idle", address.id, text])
+        if (address.host === "hc") return yield* run(target, "hc", ["send", address.id, text])
         if (address.host === "orca") {
           return yield* run(target, "orca", ["terminal", "send", "--terminal", address.id, "--text", text, "--enter"])
         }

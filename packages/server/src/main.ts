@@ -1,6 +1,6 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { CommentOutcome, DeskRpcs, Summary } from "@review-desk/contract/Contract.ts"
-import { Verdict } from "@review-desk/contract/Board.ts"
+import { Role, Verdict } from "@review-desk/contract/Board.ts"
 import { Login, PrKey, RepoSlug, SessionName, Text } from "@review-desk/contract/Ids.ts"
 import { Cause, Config, Console, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
@@ -142,14 +142,15 @@ const callerTerminal = Effect.gen(function* () {
   })
 })
 
-const claimPull = Effect.fnUntraced(function* (target: string, session: Option.Option<string>) {
+const claimPull = Effect.fnUntraced(function* (target: string, session: Option.Option<string>, role: Role) {
   const pull = yield* Schema.decodeEffect(PrKey)(target)
   const caller = yield* callerTerminal
   const chosen = Option.orElse(session, () => caller)
   yield* withDesk((client) =>
-    client.Claim({ key: pull, session: Option.getOrNull(Option.map(chosen, SessionName.make)) })
+    client.Claim({ key: pull, session: Option.getOrNull(Option.map(chosen, SessionName.make)), role })
   )
-  yield* Console.log(`claimed ${pull}${Option.match(chosen, { onNone: () => "", onSome: (who) => ` for ${who}` })}`)
+  const forWho = Option.match(chosen, { onNone: () => "", onSome: (who) => ` for ${who}` })
+  yield* Console.log(`claimed ${pull} as ${role}${forWho}`)
 })
 
 type IssueClaimInput = {
@@ -200,6 +201,12 @@ const claim = Command.make(
     target: Argument.String("target").pipe(
       Argument.withDescription("A pull request as forge:owner/repo#number, or with --issues a repository as owner/repo")
     ),
+    as: Flag.Literals("as", Role.literals).pipe(
+      Flag.withDescription(
+        "reviewer (replies to your threads, new pushes) or author (failed CI, review comments to address)"
+      ),
+      Flag.withDefault("reviewer")
+    ),
     session: Flag.String("session").pipe(
       Flag.withDescription(
         "Agent to hand a pull request to: a Herdr agent name or a terminal address (default: this terminal)"
@@ -232,7 +239,7 @@ const claim = Command.make(
   Effect.fn(function* (input) {
     if (input.issues) return yield* claimIssues(input)
 
-    return yield* claimPull(input.target, input.session)
+    return yield* claimPull(input.target, input.session, input.as)
   })
 ).pipe(Command.withDescription("Claim a pull request for an agent to review, or a repository's issues for this pane"))
 
@@ -279,7 +286,7 @@ const messageOf = (cause: Cause.Cause<unknown>): string =>
   })
 
 cli.pipe(
-  Command.run({ version: "0.1.1" }),
+  Command.run({ version: "0.1.2" }),
   Effect.tapCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Console.error(messageOf(cause)))),
   Effect.provide(BunServices.layer),
   BunRuntime.runMain

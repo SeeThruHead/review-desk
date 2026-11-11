@@ -1,4 +1,4 @@
-import type { Board } from "@review-desk/contract/Board.ts"
+import type { Board, Role } from "@review-desk/contract/Board.ts"
 import {
   type CommentRequest,
   type IssueClaimRequest,
@@ -52,7 +52,7 @@ import { DeskRepo } from "../store/DeskRepo.ts"
 import { type Reported, type Watched, branchMessage, watchedBranches } from "./BranchWatch.ts"
 import { claimId, issuePlan } from "./IssueWatch.ts"
 import { type RepoRef, withDiscovered } from "./Repos.ts"
-import { routingBrief } from "./Messages.ts"
+import { authorBrief, routingBrief } from "./Messages.ts"
 import { areaFor, plan, roleOf } from "./Plan.ts"
 
 const markerRounds = (thread: Thread | undefined, side: Side): number =>
@@ -112,7 +112,11 @@ export class Desk extends Context.Service<
     readonly summary: Stream.Stream<Summary>
     readonly refresh: Effect.Effect<void>
     readonly reportTriage: (report: TriageReport) => Effect.Effect<void, UnknownPull>
-    readonly claim: (key: PrKey, session: SessionName | null) => Effect.Effect<void, UnknownPull | DeliveryFailed>
+    readonly claim: (
+      key: PrKey,
+      session: SessionName | null,
+      role: Role
+    ) => Effect.Effect<void, UnknownPull | DeliveryFailed>
     readonly postComment: (
       request: CommentRequest
     ) => Effect.Effect<{ readonly url: Url }, UnknownPull | RoundLimitReached | PostFailed>
@@ -156,7 +160,11 @@ export class Desk extends Context.Service<
         if (client === null) return Effect.succeed([])
 
         return client.pulls(entry.slug).pipe(
-          Effect.tapError((error) => Effect.logWarning(`${error.message}; keeping the last copy of ${entry.slug}`)),
+          Effect.tapError((error) =>
+            error.paused === true
+              ? Effect.logDebug(`${error.message}; keeping the last copy of ${entry.slug}`)
+              : Effect.logWarning(`${error.message}; keeping the last copy of ${entry.slug}`)
+          ),
           Effect.catch(() =>
             Effect.map(Ref.get(factsRef), (facts) =>
               facts.filter((pull) => pull.forge === entry.forge && pull.repo === entry.slug)
@@ -181,7 +189,7 @@ export class Desk extends Context.Service<
           steps.routes,
           (route) =>
             agents.prompt(route.target, route.message).pipe(
-              Effect.andThen(repo.claim(route.pull.key, route.session)),
+              Effect.andThen(repo.claim(route.pull.key, route.session, "reviewer")),
               Effect.andThen(repo.remember(route.pull.key, route.pull.checks, route.items)),
               Effect.tap(() =>
                 Effect.logInfo(`routed ${route.pull.key} to ${route.session} (${placeOf(route.target)})`)
@@ -352,7 +360,7 @@ export class Desk extends Context.Service<
         yield* refresh
       })
 
-      const claim = Effect.fn("Desk.claim")(function* (key: PrKey, session: SessionName | null) {
+      const claim = Effect.fn("Desk.claim")(function* (key: PrKey, session: SessionName | null, role: Role) {
         yield* Effect.annotateCurrentSpan("pull", key)
         const pull = yield* pullOf(key)
         const chosen = session ?? areaFor(config, pull)?.session
@@ -363,10 +371,11 @@ export class Desk extends Context.Service<
           })
         const brief = { owner: config.owner, limit: config.roundLimit, desk: config.desk }
         const live = yield* liveAgents
+        const message = role === "author" ? authorBrief(pull, brief) : routingBrief(pull, brief)
         yield* agents
-          .prompt(targetFor(chosen, live), routingBrief(pull, brief))
+          .prompt(targetFor(chosen, live), message)
           .pipe(Effect.mapError((error) => new DeliveryFailed({ key, reason: Text.make(error.message) })))
-        yield* repo.claim(key, chosen).pipe(Effect.orDie)
+        yield* repo.claim(key, chosen, role).pipe(Effect.orDie)
         yield* refresh
       })
 

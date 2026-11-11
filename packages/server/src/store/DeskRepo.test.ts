@@ -12,8 +12,8 @@ describe("the desk's own records", () => {
     it.effect("keeps claims, triage, checks and seen items, and replaces a claim or a verdict when it changes", () =>
       Effect.gen(function* () {
         const repo = yield* DeskRepo
-        yield* repo.claim(pull, SessionName.make("auth"))
-        yield* repo.claim(pull, SessionName.make("ui-kit"))
+        yield* repo.claim(pull, SessionName.make("auth"), "reviewer")
+        yield* repo.claim(pull, SessionName.make("ui-kit"), "author")
         yield* repo.saveTriage(pull, { verdict: "look", reason: Text.make("first") }, [])
         yield* repo.saveTriage(pull, { verdict: "skim", reason: Text.make("rename only") }, [
           { thread: Text.make("a.ts"), outcome: "fixed", note: Text.make("done") }
@@ -23,6 +23,7 @@ describe("the desk's own records", () => {
         const records = yield* repo.records
 
         expect(records.claims.get(pull)).toBe("ui-kit")
+        expect(records.claimRoles.get(pull)).toBe("author")
         expect(records.triage.get(pull)).toEqual({
           triage: { verdict: "skim", reason: "rename only" },
           settled: [{ thread: "a.ts", outcome: "fixed", note: "done" }]
@@ -78,7 +79,7 @@ describe("the desk's own records", () => {
         const repo = yield* DeskRepo
         const sql = yield* SqlClient.SqlClient
         yield* sql.unsafe("DROP TABLE claims")
-        const error = yield* Effect.flip(repo.claim(pull, SessionName.make("x")))
+        const error = yield* Effect.flip(repo.claim(pull, SessionName.make("x"), "reviewer"))
         expect(error._tag).toBe("DeskRepoError")
         expect(error.message).toBe("Review Desk could not read or write its own records")
       })

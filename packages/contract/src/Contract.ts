@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
-import { Board, Settled, Verdict } from "./Board.ts"
+import { Board, Role, Settled, Verdict } from "./Board.ts"
 import { Count, Forge, Login, PrKey, RepoSlug, SessionName, Text, Url } from "./Ids.ts"
 
 export class UnknownPull extends Schema.TaggedError<UnknownPull, { readonly brand: unique symbol }>()("UnknownPull", {
@@ -102,7 +102,7 @@ export const DeskRpcs = RpcGroup.make(
     error: Schema.Union([UnknownPull, RoundLimitReached, PostFailed])
   }),
   Rpc.make("Claim", {
-    payload: { key: PrKey, session: Schema.NullOr(SessionName) },
+    payload: { key: PrKey, session: Schema.NullOr(SessionName), role: Schema.optionalKey(Role) },
     error: Schema.Union([UnknownPull, DeliveryFailed])
   }),
   Rpc.make("ClaimIssues", {

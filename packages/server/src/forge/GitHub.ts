@@ -1,10 +1,22 @@
 import type { Checks } from "@review-desk/contract/Board.ts"
 import { IsoTime, Login, PrNumber, type RepoSlug, Text, Url, prKey } from "@review-desk/contract/Ids.ts"
 import { Branch, ForgeId, type IssueFacts, type PullFacts } from "@review-desk/domain/Facts.ts"
-import { Duration, Effect, Schema } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
+import { DateTime, Duration, Effect, Option, Ref, Schema } from "effect"
+import { Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { type ForgeClient, ForgeError, type Post } from "./Forge.ts"
-import { searchesFor, uniqueByNumber } from "./GitHubSearch.ts"
+import {
+  type Brief,
+  type Cached,
+  type GraphqlFailure,
+  changedIds,
+  chunksOf,
+  graphqlFailure,
+  outOfBudget,
+  resetAt,
+  stampOf,
+  uniqueById
+} from "./GitHubPoll.ts"
+import { searchesFor } from "./GitHubSearch.ts"
 
 const Author = Schema.NullOr(Schema.Struct({ login: Schema.String }))
 const Nodes = <S extends Schema.Top>(item: S) => Schema.Struct({ nodes: Schema.Array(item) })
@@ -62,18 +74,45 @@ const PullNode = Schema.Struct({
 })
 type PullNode = typeof PullNode.Type
 
-const Response = Schema.Struct({
-  data: Schema.Struct({
-    involved: Nodes(PullNode),
-    requested: Nodes(PullNode),
-    reviewed: Nodes(PullNode),
-    labelled: Nodes(PullNode),
-    merged: Nodes(PullNode)
-  })
+const BriefNode = Schema.Struct({
+  id: Schema.String,
+  updatedAt: Schema.String,
+  latest: Nodes(
+    Schema.Struct({
+      commit: Schema.Struct({ statusCheckRollup: Schema.NullOr(Schema.Struct({ state: Schema.String })) })
+    })
+  )
 })
 
+const ListData = Schema.Struct({
+  involved: Nodes(BriefNode),
+  requested: Nodes(BriefNode),
+  reviewed: Nodes(BriefNode),
+  labelled: Nodes(BriefNode),
+  merged: Nodes(BriefNode)
+})
+
+const DetailData = Schema.Struct({
+  nodes: Schema.Array(Schema.NullOr(Schema.Struct({ id: Schema.String, ...PullNode.fields })))
+})
+
+const briefOf = (node: typeof BriefNode.Type): Brief => ({
+  id: node.id,
+  updatedAt: node.updatedAt,
+  checks: node.latest.nodes[0]?.commit.statusCheckRollup?.state ?? null
+})
+
+const LIST_QUERY = `query($involved: String!, $requested: String!, $reviewed: String!, $labelled: String!, $merged: String!) {
+  involved: search(query: $involved, type: ISSUE, first: 50) { nodes { ...Brief } }
+  requested: search(query: $requested, type: ISSUE, first: 50) { nodes { ...Brief } }
+  reviewed: search(query: $reviewed, type: ISSUE, first: 50) { nodes { ...Brief } }
+  labelled: search(query: $labelled, type: ISSUE, first: 50) { nodes { ...Brief } }
+  merged: search(query: $merged, type: ISSUE, first: 10) { nodes { ...Brief } }
+}
+fragment Brief on PullRequest { id updatedAt latest: commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }`
+
 const PULL_FIELDS = `fragment Pull on PullRequest {
-    number title body url state isDraft mergeable updatedAt headRefName baseRefName headRefOid
+    id number title body url state isDraft mergeable updatedAt headRefName baseRefName headRefOid
     author { login }
     labels(first: 20) { nodes { name } }
     reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
@@ -84,14 +123,10 @@ const PULL_FIELDS = `fragment Pull on PullRequest {
     reviewThreads(last: 50) { nodes { isResolved path line comments(first: 30) { nodes { databaseId body createdAt url author { login } } } } }
 }`
 
-const QUERY = `query($involved: String!, $requested: String!, $reviewed: String!, $labelled: String!, $merged: String!) {
-  involved: search(query: $involved, type: ISSUE, first: 30) { nodes { ...Pull } }
-  requested: search(query: $requested, type: ISSUE, first: 30) { nodes { ...Pull } }
-  reviewed: search(query: $reviewed, type: ISSUE, first: 30) { nodes { ...Pull } }
-  labelled: search(query: $labelled, type: ISSUE, first: 30) { nodes { ...Pull } }
-  merged: search(query: $merged, type: ISSUE, first: 10) { nodes { ...Pull } }
-}
+const DETAIL_QUERY = `query($ids: [ID!]!) { nodes(ids: $ids) { ...Pull } }
 ${PULL_FIELDS}`
+
+const detailBatch = 50
 
 const loginOf = (author: typeof Author.Type): Login => Login.make(author?.login.replace(/\[bot\]$/, "") ?? "ghost")
 
@@ -177,9 +212,7 @@ const IssueNode = Schema.Struct({
   comments: Nodes(CommentNode)
 })
 
-const IssuesResponse = Schema.Struct({
-  data: Schema.Struct({ repository: Schema.NullOr(Schema.Struct({ issues: Nodes(IssueNode) })) })
-})
+const IssuesData = Schema.Struct({ repository: Schema.NullOr(Schema.Struct({ issues: Nodes(IssueNode) })) })
 
 const ISSUES_QUERY = `query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
@@ -209,6 +242,13 @@ const issueOf =
 
 const failed = (error: { readonly message: string }) => new ForgeError({ forge: "github", reason: error.message })
 
+const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis))
+
+const pausedError = (until: number) =>
+  new ForgeError({ forge: "github", reason: `rate limit reached; paused until ${isoOf(until)}`, paused: true })
+
+const Envelope = Schema.Struct({ data: Schema.Unknown })
+
 const requestFor = (pull: PullFacts, post: Post) => {
   if (post.replyTo !== null)
     return HttpClientRequest.post(`/repos/${pull.repo}/pulls/${pull.number}/comments/${post.replyTo}/replies`).pipe(
@@ -231,7 +271,7 @@ const requestFor = (pull: PullFacts, post: Post) => {
 }
 
 export const gitHubClient = Effect.fnUntraced(function* (api: string, token: string, intakeLabel: string) {
-  const http = (yield* HttpClient.HttpClient).pipe(
+  const raw = (yield* HttpClient.HttpClient).pipe(
     HttpClient.mapRequest((request) =>
       request.pipe(
         HttpClientRequest.prependUrl(api),
@@ -239,29 +279,90 @@ export const gitHubClient = Effect.fnUntraced(function* (api: string, token: str
         HttpClientRequest.setHeader("user-agent", "review-desk"),
         HttpClientRequest.setHeader("accept", "application/vnd.github+json")
       )
-    ),
-    HttpClient.filterStatusOk
+    )
   )
+  const http = raw.pipe(HttpClient.filterStatusOk)
+  const pausedUntil = yield* Ref.make(0)
+  const cache = yield* Ref.make<ReadonlyMap<string, Cached<PullNode>>>(new Map())
 
-  const pulls = Effect.fn("GitHub.pulls")(function* (repo: RepoSlug) {
-    yield* Effect.annotateCurrentSpan("repo", repo)
+  const pause = Effect.fnUntraced(function* (response: HttpClientResponse.HttpClientResponse, message: string) {
+    const now = yield* DateTime.now
+    const until = resetAt(Headers.get(response.headers, "x-ratelimit-reset"), DateTime.toEpochMillis(now))
+    yield* Ref.set(pausedUntil, until)
+    yield* Effect.logWarning(
+      `GitHub's rate limit for this account is spent (${message}); every desk and gh on the account share it. No GitHub calls until ${isoOf(until)}.`
+    )
+
+    return yield* pausedError(until)
+  })
+
+  const notPaused = Effect.gen(function* () {
+    const until = yield* Ref.get(pausedUntil)
+    const now = yield* DateTime.now
+    if (DateTime.toEpochMillis(now) >= until) return
+
+    return yield* pausedError(until)
+  })
+
+  const reject = (response: HttpClientResponse.HttpClientResponse, failure: GraphqlFailure) =>
+    failure.rateLimited ? pause(response, failure.message) : Effect.fail(failed(failure))
+
+  const graphql = Effect.fnUntraced(function* <S extends Schema.Top>(body: object, data: S) {
+    yield* notPaused
     const response = yield* HttpClientRequest.post("/graphql").pipe(
-      HttpClientRequest.bodyJsonUnsafe({ query: QUERY, variables: searchesFor(repo, intakeLabel) }),
-      http.execute,
-      Effect.flatMap(HttpClientResponse.schemaBodyJson(Response)),
+      HttpClientRequest.bodyJsonUnsafe(body),
+      raw.execute,
       Effect.timeout(Duration.seconds(30)),
       Effect.mapError(failed)
     )
+    const remaining = Headers.get(response.headers, "x-ratelimit-remaining")
+    if (outOfBudget(response.status, remaining)) return yield* pause(response, `HTTP ${response.status}`)
+    if (response.status >= 300) return yield* failed({ message: `HTTP ${response.status}` })
+    const json = yield* response.json.pipe(Effect.timeout(Duration.seconds(30)), Effect.mapError(failed))
+    const failure = graphqlFailure(json)
+    if (Option.isSome(failure)) return yield* reject(response, failure.value)
+    const envelope = yield* Schema.decodeUnknownEffect(Envelope)(json).pipe(Effect.mapError(failed))
 
-    const found = response.data
+    return yield* Schema.decodeUnknownEffect(data)(envelope.data).pipe(Effect.mapError(failed))
+  })
 
-    return uniqueByNumber([
-      ...found.involved.nodes,
-      ...found.requested.nodes,
-      ...found.reviewed.nodes,
-      ...found.labelled.nodes,
-      ...found.merged.nodes
-    ]).map((node) => factsOf(repo, node))
+  const detailsOf = (ids: ReadonlyArray<string>) =>
+    Effect.forEach(chunksOf(ids, detailBatch), (batch) =>
+      graphql({ query: DETAIL_QUERY, variables: { ids: batch } }, DetailData)
+    ).pipe(
+      Effect.map(
+        (answers) =>
+          new Map(
+            answers
+              .flatMap((answer) => answer.nodes)
+              .flatMap((node) => (node === null ? [] : [[node.id, node] as const]))
+          )
+      )
+    )
+
+  const pulls = Effect.fn("GitHub.pulls")(function* (repo: RepoSlug) {
+    yield* Effect.annotateCurrentSpan("repo", repo)
+    const found = yield* graphql({ query: LIST_QUERY, variables: searchesFor(repo, intakeLabel) }, ListData)
+    const briefs = uniqueById(
+      [
+        ...found.involved.nodes,
+        ...found.requested.nodes,
+        ...found.reviewed.nodes,
+        ...found.labelled.nodes,
+        ...found.merged.nodes
+      ].map(briefOf)
+    )
+    const known = yield* Ref.get(cache)
+    const fresh = yield* detailsOf(changedIds(briefs, known))
+    const current = new Map(
+      briefs.flatMap((brief) => {
+        const node = fresh.get(brief.id) ?? known.get(brief.id)?.node
+        return node === undefined ? [] : [[brief.id, { stamp: stampOf(brief), node }] as const]
+      })
+    )
+    yield* Ref.update(cache, (before) => new Map([...before, ...current]))
+
+    return [...current.values()].map((entry) => factsOf(repo, entry.node))
   })
 
   const post = Effect.fn("GitHub.post")(function* (pull: PullFacts, input: Post) {
@@ -287,14 +388,9 @@ export const gitHubClient = Effect.fnUntraced(function* (api: string, token: str
   const issues = Effect.fn("GitHub.issues")(function* (repo: RepoSlug) {
     yield* Effect.annotateCurrentSpan("repo", repo)
     const [owner, name] = repo.split("/")
-    const response = yield* send(
-      HttpClientRequest.post("/graphql").pipe(
-        HttpClientRequest.bodyJsonUnsafe({ query: ISSUES_QUERY, variables: { owner, name } })
-      ),
-      IssuesResponse
-    )
+    const found = yield* graphql({ query: ISSUES_QUERY, variables: { owner, name } }, IssuesData)
 
-    return (response.data.repository?.issues.nodes ?? []).map(issueOf(repo))
+    return (found.repository?.issues.nodes ?? []).map(issueOf(repo))
   })
 
   const commentOnIssue = Effect.fn("GitHub.commentOnIssue")(function* (repo: RepoSlug, number: number, body: string) {

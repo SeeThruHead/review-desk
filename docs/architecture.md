@@ -91,6 +91,10 @@ Agents can live on other machines. `machines` in the config lists Herdr machine 
 
 With `gitea.discoverOwned` on, the desk also watches every live repository on Gitea owned by one of its logins (`desk` and `aliases`), looked up at the start of each poll (`Repos.ts`), so a new repository needs no config change. `repos` still lists anything else, such as GitHub repositories or ones owned by other people.
 
+A pull request claim names its side (`review-desk claim <pull> --as reviewer|author`, stored in `claim_roles`; a claim from before roles counts as a reviewer's). A reviewer claim gets replies to its threads and, once per new head commit, a notice that commits were pushed (remembered as an `h:<sha>` seen item, so the first look and a restart never send it). An author claim makes the desk treat the pull request as its own: failed CI and the review comments to address go to the claiming terminal even when no agent is on the branch.
+
+GitHub is read in two steps to stay inside the account's GraphQL budget, which every desk and `gh` on the account share: a cheap search returns each pull request's id, update time and CI state, and full detail is fetched (by id, 50 at a time) only for the ones whose update time or CI state changed. A `RATE_LIMITED` answer, or a 403 with no requests left, pauses every GitHub call until the reset time GitHub sends, with one warning.
+
 Issues reach agents through claims. `review-desk claim <owner/repo> --issues --from <login>` records the pane (and its Herdr machine) with the authors it trusts (`issue_claims`). Each poll the desk reads the open issues and their comments of every claimed repository, on each forge where `repos` lists it, and delivers new issues and comments from those authors only (`IssueWatch.ts`, pure). Everything else is marked seen and dropped. A new claim records what is already there without delivering it. `review-desk comment <forge:owner/repo#n> --body … [--close]` answers on an issue with the agent label and can close it; the desk treats any key that is not one of its pull requests as an issue in a configured repository.
 
 ## Decisions for this scale

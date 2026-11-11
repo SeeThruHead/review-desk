@@ -3,7 +3,7 @@ import { Config, Context, Effect, FileSystem, Layer, Option, Path, Schema } from
 import { createConnection } from "node:net"
 import { DeskConfig } from "../config/DeskConfig.ts"
 import { type CommandFailed, Shell } from "../platform/Shell.ts"
-import { parseAddress } from "./Address.ts"
+import { type Step, deliveryFor } from "./Delivery.ts"
 import { type AgentTarget, type Location, locateScript, parseLocations } from "./Remote.ts"
 import {
   AppMachines,
@@ -14,7 +14,6 @@ import {
   OrcaTerminals,
   appAgents,
   connectedMachines,
-  bracketed,
   claudeAgents,
   cmuxAgent,
   inboxLine,
@@ -99,8 +98,6 @@ const quiet =
 
 const failed = (target: AgentTarget) => (error: { readonly message: string }) =>
   new PromptFailed({ agent: target.pane, reason: error.message })
-
-const buffer = (id: string) => `review-desk-${id.replace(/\W/g, "")}`
 
 const sendTimeout = "5 seconds"
 
@@ -274,8 +271,8 @@ export class Agents extends Context.Service<
         Effect.withSpan("Agents.list")
       )
 
-      const run = (target: AgentTarget, command: string, args: ReadonlyArray<string>, stdin?: string) =>
-        shell.run(command, args, stdin === undefined ? {} : { stdin }).pipe(
+      const run = (target: AgentTarget, step: Step) =>
+        shell.run(step.command, step.args, step.stdin === undefined ? {} : { stdin: step.stdin }).pipe(
           Effect.asVoid,
           Effect.mapError((error: CommandFailed) => failed(target)(error))
         )
@@ -289,24 +286,9 @@ export class Agents extends Context.Service<
 
       const prompt = Effect.fn("Agents.prompt")(function* (target: AgentTarget, text: string) {
         yield* Effect.annotateCurrentSpan("agent", target.pane)
-        const address = parseAddress(target.pane)
-        const machine = target.machine === null ? [] : ["--machine", target.machine]
-        if (address.host === "herdr")
-          return yield* run(target, "herdr", [...machine, "agent", "prompt", address.id, text])
-        if (address.host === "hc") return yield* run(target, "hc", ["send", address.id, text])
-        if (address.host === "orca") {
-          return yield* run(target, "orca", ["terminal", "send", "--terminal", address.id, "--text", text, "--enter"])
-        }
-        if (address.host === "claude") return yield* promptClaude(target, address.id, text)
-        if (address.host === "cmux") {
-          yield* run(target, "cmux", ["set-buffer", "--name", buffer(address.id), bracketed(text)])
-          yield* run(target, "cmux", ["paste-buffer", "--name", buffer(address.id), "--workspace", address.id])
-
-          return yield* run(target, "cmux", ["send-key", "--workspace", address.id, "enter"])
-        }
-        yield* run(target, "tmux", ["load-buffer", "-b", buffer(address.id), "-"], text)
-        yield* run(target, "tmux", ["paste-buffer", "-p", "-d", "-b", buffer(address.id), "-t", address.id])
-        yield* run(target, "tmux", ["send-keys", "-t", address.id, "Enter"])
+        const delivery = deliveryFor(target, text)
+        if (delivery._tag === "Inbox") return yield* promptClaude(target, delivery.session, text)
+        yield* Effect.forEach(delivery.steps, (step) => run(target, step), { discard: true })
       })
 
       return Agents.of({ list, prompt })

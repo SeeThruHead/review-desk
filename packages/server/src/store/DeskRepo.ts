@@ -1,4 +1,4 @@
-import { Settled, Triage } from "@review-desk/contract/Board.ts"
+import { Role, Settled, Triage } from "@review-desk/contract/Board.ts"
 import { Forge, Login, type PrKey, RepoSlug, SessionName } from "@review-desk/contract/Ids.ts"
 import { SeenBranch } from "@review-desk/domain/Branches.ts"
 import type { IssueClaim } from "../desk/IssueWatch.ts"
@@ -17,6 +17,7 @@ export class DeskRepoError extends Schema.TaggedError<DeskRepoError, { readonly 
 }
 
 const ClaimRow = Schema.Struct({ pull: Schema.String, session: SessionName })
+const ClaimRoleRow = Schema.Struct({ pull: Schema.String, role: Role })
 const TriageRow = Schema.Struct({
   pull: Schema.String,
   verdict: Triage.fields.verdict,
@@ -45,6 +46,7 @@ const BranchRow = Schema.Struct({
 
 export type Records = {
   readonly claims: ReadonlyMap<string, SessionName>
+  readonly claimRoles: ReadonlyMap<string, Role>
   readonly triage: ReadonlyMap<string, { readonly triage: Triage; readonly settled: ReadonlyArray<Settled> }>
   readonly known: ReadonlyMap<string, string>
   readonly seen: ReadonlySet<string>
@@ -56,7 +58,7 @@ export class DeskRepo extends Context.Service<
   DeskRepo,
   {
     readonly records: Effect.Effect<Records, DeskRepoError>
-    readonly claim: (pull: PrKey, session: SessionName) => Effect.Effect<void, DeskRepoError>
+    readonly claim: (pull: PrKey, session: SessionName, role: Role) => Effect.Effect<void, DeskRepoError>
     readonly saveTriage: (
       pull: PrKey,
       triage: Triage,
@@ -79,9 +81,12 @@ export class DeskRepo extends Context.Service<
       const now = Effect.map(DateTime.now, DateTime.formatIso)
 
       const records = Effect.gen(function* () {
-        const [claims, triage, pulls, items] = yield* Effect.all([
+        const [claims, roles, triage, pulls, items] = yield* Effect.all([
           sql`SELECT pull, session FROM claims`.pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ClaimRow)))
+          ),
+          sql`SELECT pull, role FROM claim_roles`.pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ClaimRoleRow)))
           ),
           sql`SELECT pull, verdict, reason, settled FROM triage`.pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(TriageRow)))
@@ -92,6 +97,7 @@ export class DeskRepo extends Context.Service<
 
         return {
           claims: new Map(claims.map((row) => [row.pull, row.session])),
+          claimRoles: new Map(roles.map((row) => [row.pull, row.role])),
           triage: new Map(
             triage.map((row) => [
               row.pull,
@@ -103,10 +109,12 @@ export class DeskRepo extends Context.Service<
         }
       }).pipe(failed, Effect.withSpan("DeskRepo.records"))
 
-      const claim = Effect.fn("DeskRepo.claim")(function* (pull: PrKey, session: SessionName) {
+      const claim = Effect.fn("DeskRepo.claim")(function* (pull: PrKey, session: SessionName, role: Role) {
         const at = yield* now
         yield* sql`INSERT INTO claims (pull, session, claimed_at) VALUES (${pull}, ${session}, ${at})
           ON CONFLICT (pull) DO UPDATE SET session = excluded.session, claimed_at = excluded.claimed_at`
+        yield* sql`INSERT INTO claim_roles (pull, role) VALUES (${pull}, ${role})
+          ON CONFLICT (pull) DO UPDATE SET role = excluded.role`
       }, failed)
 
       const saveTriage = Effect.fn("DeskRepo.saveTriage")(function* (

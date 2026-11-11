@@ -12,7 +12,7 @@ export const Handlers = DeskRpcs.toLayer(
       OpenInSidediff: ({ key }) => desk.openInSidediff(key),
       ReportTriage: (report) => desk.reportTriage(report),
       PostComment: (request) => desk.postComment(request),
-      Claim: ({ key, session }) => desk.claim(key, session),
+      Claim: ({ key, session, role }) => desk.claim(key, session, role ?? "reviewer"),
       ClaimIssues: (request) => desk.claimIssues(request),
       ReleaseIssues: ({ repo, machine, pane }) => desk.releaseIssues(repo, { machine, pane })
     })

@@ -64,6 +64,7 @@ const isAsked = (settings: Settings, pull: PullFacts): boolean => {
 }
 
 export const roleOf = (settings: Settings, pull: PullFacts, records: Records): Role | null => {
+  if (records.claimRoles.get(pull.key) === "author") return "author"
   if (settings.roles.includes("author") && isMe(settings, pull.author)) return "author"
   if (!settings.roles.includes("reviewer")) return null
   if (records.claims.has(pull.key)) return "reviewer"
@@ -91,18 +92,38 @@ export const agentFor = (
   records: Records,
   agents: ReadonlyArray<LiveAgent>
 ): LiveAgent | undefined => {
+  const claimed = claimFor(pull, role, records)
+  if (claimed !== undefined) return agents.find((agent) => answersTo(agent, claimed))
   if (role === "author") return agents.find((agent) => onBranch(agent, pull))
-  const session = records.claims.get(pull.key)
 
-  return agents.find((agent) => answersTo(agent, session))
+  return undefined
+}
+
+const claimFor = (pull: PullFacts, role: Role, records: Records): SessionName | undefined => {
+  const session = records.claims.get(pull.key)
+  if (session === undefined) return undefined
+
+  return (records.claimRoles.get(pull.key) ?? "reviewer") === role ? session : undefined
 }
 
 const cardAgent = (pull: PullFacts, role: Role, records: Records, agents: ReadonlyArray<LiveAgent>): Agent | null => {
   const live = agentFor(pull, role, records, agents)
   if (live !== undefined) return { session: live.name, working: live.working }
-  const session = records.claims.get(pull.key)
+  const session = claimFor(pull, role, records)
 
-  return role === "reviewer" && session !== undefined ? { session, working: false } : null
+  return session === undefined ? null : { session, working: false }
+}
+
+const pushKey = (pull: PullFacts): string => `h:${pull.headSha}`
+
+const seenAnyPush = (records: Records, pull: PullFacts): boolean =>
+  [...records.seen].some((entry) => entry.startsWith(`${pull.key} h:`))
+
+const newPush = (records: Records, pull: PullFacts, role: Role): boolean => {
+  if (role !== "reviewer") return false
+  if (!seenAnyPush(records, pull)) return false
+
+  return !records.seen.has(`${pull.key} ${pushKey(pull)}`)
 }
 
 const touches = (area: Area, pull: PullFacts): boolean => {
@@ -181,24 +202,26 @@ const deliveryOf = (
   if (role === "reviewer" && !input.records.claims.has(pull.key)) return nothing
   const all = itemsOf(pull)
   if (!input.records.known.has(pull.key))
-    return { deliveries: [], remember: [{ pull, items: all.map((item) => item.key) }] }
+    return { deliveries: [], remember: [{ pull, items: [...all.map((item) => item.key), pushKey(pull)] }] }
 
   const limited = atLimit(pull, input.settings.roundLimit)
   const fresh = all.filter((item) => !input.records.seen.has(`${pull.key} ${item.key}`))
   const wanted = fresh.filter((item) => forMe(input.settings, sideOf(role), item) && !limited.has(item.key))
   const failedChecks = role === "author" && pull.checks === "failed" && input.records.known.get(pull.key) !== "failed"
+  const pushed = newPush(input.records, pull, role)
   const agent = agentFor(pull, role, input.records, input.agents)
-  const skipped = { pull, items: fresh.filter((item) => !wanted.includes(item)).map((item) => item.key) }
+  const unwanted = fresh.filter((item) => !wanted.includes(item)).map((item) => item.key)
+  const skipped = { pull, items: [...unwanted, pushKey(pull)] }
 
-  if (wanted.length === 0 && !failedChecks) return { deliveries: [], remember: [skipped] }
-  if (agent === undefined) return { deliveries: [], remember: [skipped] }
+  if (wanted.length === 0 && !failedChecks && !pushed) return { deliveries: [], remember: [skipped] }
+  if (agent === undefined) return { deliveries: [], remember: [pushed ? { pull, items: unwanted } : skipped] }
 
   return {
     deliveries: [
       {
         pull,
         agent: { machine: agent.machine, pane: agent.pane },
-        message: updateMessage(pull, role, wanted, failedChecks, brief(input.settings)),
+        message: updateMessage(pull, role, wanted, { failedChecks, pushed }, brief(input.settings)),
         items: wanted.map((item) => item.key)
       }
     ],

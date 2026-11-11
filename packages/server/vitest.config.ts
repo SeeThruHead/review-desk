@@ -13,11 +13,13 @@ export default defineConfig({
         "src/desk/Messages.ts",
         "src/desk/BranchWatch.ts",
         "src/forge/GitHubSearch.ts",
+        "src/forge/GitHubPoll.ts",
         "src/desk/IssueWatch.ts",
         "src/desk/Repos.ts",
         "src/agents/Remote.ts",
         "src/agents/Address.ts",
         "src/agents/Terminals.ts",
+        "src/agents/Delivery.ts",
         "src/store/DeskRepo.ts"
       ],
       reporter: ["text-summary", "text"],

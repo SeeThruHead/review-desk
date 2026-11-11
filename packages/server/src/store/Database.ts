@@ -9,6 +9,7 @@ const migrations = [
   "CREATE TABLE IF NOT EXISTS seen_items (pull TEXT NOT NULL, item TEXT NOT NULL, PRIMARY KEY (pull, item))",
   "CREATE TABLE IF NOT EXISTS pulls (pull TEXT PRIMARY KEY, first_seen TEXT NOT NULL, checks TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS branches (branch TEXT PRIMARY KEY, done TEXT NOT NULL, failing TEXT NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS claim_roles (pull TEXT PRIMARY KEY, role TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS issue_claims (id TEXT PRIMARY KEY, forge TEXT NOT NULL, repo TEXT NOT NULL, machine TEXT, pane TEXT NOT NULL, from_logins TEXT NOT NULL, baselined INTEGER NOT NULL)"
 ]
 

@@ -5,7 +5,8 @@ import { Context, type Effect, Schema } from "effect"
 
 export class ForgeError extends Schema.TaggedError<ForgeError, { readonly brand: unique symbol }>()("ForgeError", {
   forge: Schema.String,
-  reason: Schema.String
+  reason: Schema.String,
+  paused: Schema.optionalKey(Schema.Boolean)
 }) {
   override get message() {
     return `${this.forge} did not answer as expected: ${this.reason}`

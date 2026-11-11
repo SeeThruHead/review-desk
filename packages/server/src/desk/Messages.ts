@@ -35,6 +35,15 @@ export const routingBrief = (pull: PullFacts, brief: Brief): string =>
     `Never approve, request changes, merge or push to their branch. Those stay with ${brief.owner}.`
   ].join("\n")
 
+export const authorBrief = (pull: PullFacts, brief: Brief): string =>
+  [
+    `[review-desk] You claimed ${head(pull)} as its author's agent.`,
+    caution,
+    `From now on this terminal gets the pull request's failed CI runs and the review comments to address. Work in a checkout of ${pull.head}, fix what is right, commit and push, then answer each comment through the desk:`,
+    `  review-desk comment ${pull.key} --reply-to <comment id> --outcome fixed|answered|dropped --body "<what you did or why not>"`,
+    `Use --outcome dropped only when you can show the finding is wrong. The desk stops after ${brief.limit} rounds per thread. Comments from people are answered only with ${brief.owner}.`
+  ].join("\n")
+
 const who = (comment: Comment): string =>
   Option.match(markerOf(comment.body), {
     onNone: () => comment.author,
@@ -75,20 +84,26 @@ const instructionsFor = (
   return role === "author" ? authorInstructions(pull, brief) : reviewerInstructions(pull)
 }
 
+export type Changes = { readonly failedChecks: boolean; readonly pushed: boolean }
+
+const pushedLine = (pull: PullFacts) =>
+  `- New commits were pushed; the branch is now at ${pull.headSha.slice(0, 7)}. Fetch it, read what changed since you last reviewed, and comment only on what the new commits settle or raise.`
+
 export const updateMessage = (
   pull: PullFacts,
   role: Role,
   items: ReadonlyArray<Item>,
-  failedChecks: boolean,
+  changes: Changes,
   brief: Brief
 ): string =>
   [
     `[review-desk] ${head(pull)} has updates:`,
     ...items.map(itemLine),
-    ...(failedChecks
+    ...(changes.failedChecks
       ? [
           `- CI failed on ${pull.headSha.slice(0, 7)}. Read the failing job's log, fix the cause in this branch and push.`
         ]
       : []),
+    ...(changes.pushed ? [pushedLine(pull)] : []),
     ...instructionsFor(pull, role, items, brief)
   ].join("\n")

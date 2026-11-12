@@ -1,5 +1,6 @@
 import { Forge, Login, RepoSlug, SessionName } from "@review-desk/contract/Ids.ts"
 import { Config, Context, Effect, FileSystem, Layer, Schema } from "effect"
+import { outsideOwners } from "../desk/Repos.ts"
 
 export const RepoRef = Schema.Struct({ forge: Forge, slug: RepoSlug })
 export type RepoRef = typeof RepoRef.Type
@@ -31,7 +32,8 @@ export const DeskSettings = Schema.Struct({
   gitea: Schema.NullOr(
     Schema.Struct({ url: Schema.String, tokenFile: Schema.String, discoverOwned: Schema.optionalKey(Schema.Boolean) })
   ),
-  machines: Schema.optionalKey(Schema.Array(Schema.Struct({ label: Schema.String, seat: Schema.String })))
+  machines: Schema.optionalKey(Schema.Array(Schema.Struct({ label: Schema.String, seat: Schema.String }))),
+  owners: Schema.optionalKey(Schema.Array(Schema.String))
 })
 export type DeskSettings = typeof DeskSettings.Type
 
@@ -60,6 +62,13 @@ export class DeskConfig extends Context.Service<DeskConfig, DeskSettings & { rea
       const settings = yield* Schema.decodeEffect(Schema.fromJsonString(DeskSettings))(text).pipe(
         Effect.mapError((error) => new ConfigUnreadable({ path, reason: error.message }))
       )
+
+      const outside = outsideOwners(settings.repos, settings.owners)
+      if (outside.length > 0)
+        return yield* new ConfigUnreadable({
+          path,
+          reason: `repos lists ${outside.map((entry) => entry.slug).join(", ")}, outside owners (${(settings.owners ?? []).join(", ")}); remove them or add their owner to owners`
+        })
 
       return DeskConfig.of({ ...settings, home })
     })

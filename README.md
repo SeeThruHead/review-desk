@@ -60,6 +60,7 @@ On Linux, Waybar can poll `review-desk summary`, which prints the summary as JSO
 - `desk` and `aliases`: your logins on each forge.
 - `roles`: `author`, `reviewer` or both.
 - `repos` and `people`: the only repositories and people whose pull requests and comments may reach an agent.
+- `owners` (optional): the only repository owners this desk may read, for example `["you", "you-gitea"]` on a personal machine. A desk refuses to start when `repos` lists anything outside them, and `gitea.discoverOwned` never adds one. Without it every owner is allowed.
 - `areas`: which Herdr session reviews which repositories (and, optionally, paths). With none, review requests stay with you, and the board says so.
 - `roundLimit`, `intakeLabel`, `pollSeconds`, `port`.
 - `sidediff.checkouts`: where to open pull requests in sidediff.

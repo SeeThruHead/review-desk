@@ -3,6 +3,10 @@
   "aliases": [
     "your-gitea-login"
   ],
+  "owners": [
+    "your-github-login",
+    "your-gitea-login"
+  ],
   "owner": "Your Name",
   "roles": [
     "author",

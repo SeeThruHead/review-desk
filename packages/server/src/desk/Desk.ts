@@ -180,7 +180,7 @@ export class Desk extends Context.Service<
         const gitea = forges.gitea
         if (gitea === null || config.gitea?.discoverOwned !== true) return
         const owned = yield* gitea.ownedRepos([config.desk, ...config.aliases])
-        yield* Ref.set(reposRef, withDiscovered(config.repos, "gitea", owned))
+        yield* Ref.set(reposRef, withDiscovered(config.repos, "gitea", owned, config.owners))
       }).pipe(Effect.catch((error) => Effect.logWarning(`${error.message}; keeping the last list of repositories`)))
 
       const fetchRepo = (entry: RepoRef): Effect.Effect<Fetched<PullFacts>> => {

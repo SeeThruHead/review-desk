@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { RepoSlug } from "@review-desk/contract/Ids.ts"
-import { ownedBy, withDiscovered } from "./Repos.ts"
+import { isWithin, outsideOwners, ownedBy, withDiscovered } from "./Repos.ts"
 
 const listed = [
   { forge: "github" as const, slug: RepoSlug.make("acme/api") },
@@ -31,5 +31,22 @@ describe("the repositories the desk watches", () => {
     ]
 
     expect(ownedBy(found, ["you", "you-gitea"])).toEqual(["you/infra", "You-Gitea/tool"])
+  })
+
+  it("names every listed repository whose owner is not one of the desk's owners", () => {
+    expect(outsideOwners(listed, ["You"])).toEqual([{ forge: "github", slug: "acme/api" }])
+    expect(outsideOwners(listed, ["you", "acme"])).toEqual([])
+    expect(outsideOwners(listed, undefined)).toEqual([])
+  })
+
+  it("never adds a discovered repository outside the desk's owners", () => {
+    expect(withDiscovered([], "gitea", [RepoSlug.make("you/a"), RepoSlug.make("acme/b")], ["you"])).toEqual([
+      { forge: "gitea", slug: "you/a" }
+    ])
+  })
+
+  it("lets every owner in when no owners are set", () => {
+    expect(isWithin(undefined, "acme/api")).toBe(true)
+    expect(isWithin([], "acme/api")).toBe(false)
   })
 })

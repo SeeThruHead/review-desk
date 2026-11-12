@@ -7,7 +7,7 @@ describe("which part of the queue a pull request is in", () => {
     expect(countIn(busyBoard.cards, "ready")).toBe(3)
     expect(countIn(busyBoard.cards, "working")).toBe(2)
     expect(countIn(busyBoard.cards, "queue")).toBe(5)
-    expect(countIn(busyBoard.cards, "history")).toBe(2)
+    expect(countIn(busyBoard.cards, "history")).toBe(4)
   })
 
   it("never counts a merged pull request as being worked on, even when its session is busy elsewhere", () => {

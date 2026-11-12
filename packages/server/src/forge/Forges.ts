@@ -19,7 +19,11 @@ export const ForgesLive = Layer.effect(
       usesForge(config, "github") && command !== undefined
         ? yield* shell
             .run(command, args)
-            .pipe(Effect.flatMap((token) => gitHubClient(config.github.api, token.trim(), config.intakeLabel)))
+            .pipe(
+              Effect.flatMap((token) =>
+                gitHubClient(config.github.api, token.trim(), config.intakeLabel, config.pollSeconds)
+              )
+            )
         : null
     const gitea =
       (usesForge(config, "gitea") || config.gitea?.discoverOwned === true) && config.gitea !== null

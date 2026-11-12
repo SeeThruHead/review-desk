@@ -25,3 +25,11 @@ export const Lasting: StoryObj = {
     await expect(within(alert).queryByRole("button")).toBeNull()
   }
 }
+
+export const Info: StoryObj = {
+  render: story((h) => Alert(h, { tone: "info", text: "Routing off: No areas configured." })),
+  play: async ({ canvasElement }) => {
+    const status = await within(canvasElement).findByRole("status")
+    await expect(status).toHaveTextContent("Routing off: No areas configured.")
+  }
+}

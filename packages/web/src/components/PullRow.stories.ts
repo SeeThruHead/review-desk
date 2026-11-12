@@ -3,7 +3,9 @@ import type { Card } from "@review-desk/contract/Board.ts"
 import {
   architectureCard,
   awaitingThemCard,
+  mergeReadyCard,
   mergedCard,
+  queuedCard,
   reviewedCard,
   reviewingCard,
   talkingCard,
@@ -33,6 +35,7 @@ const row = (card: Card, expanded: boolean) =>
           cards: [card],
           expanded: expanded ? [card.key] : [],
           sidediff: true,
+          time: () => "13:10",
           onChange: () => logged(`toggle ${card.number}`),
           onOpenInSidediff: () => logged("sidediff")
         })
@@ -170,6 +173,7 @@ export const HistoryRowOpen: StoryObj = {
           ],
           expanded: [reviewedCard.key, mergedCard.key],
           sidediff: false,
+          time: () => "13:10",
           onChange: () => logged("t"),
           onOpenInSidediff: () => logged("s")
         })
@@ -188,5 +192,50 @@ export const TheirAgentsTurn: StoryObj = {
   play: async ({ canvasElement }) => {
     const toggle = await within(canvasElement).findByRole("button", { name: /Trust gate for untrusted repositories/ })
     await expect(toggle).toHaveTextContent("Agents talking, round 1 of 3, their agent's turn")
+  }
+}
+
+export const ReadyToMerge: StoryObj = {
+  render: row(mergeReadyCard, true),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const toggle = await canvas.findByRole("button", { name: /Focus ring on the menu items/ })
+    await expect(toggle).toHaveTextContent("Approved with CI passed: ready to merge")
+    await expect(toggle).toHaveTextContent("ui-kit, claimed as author agent")
+    await expect(toggle).toHaveTextContent("Approved")
+    const details = within(canvas.getByRole("region", { name: /Focus ring on the menu items/ }))
+    await expect(details.getByText("Last delivered to the agent: Sent the CI failure, 13:10")).toBeVisible()
+  }
+}
+
+export const InTheMergeQueue: StoryObj = {
+  render: row(queuedCard, false),
+  play: async ({ canvasElement }) => {
+    const toggle = await within(canvasElement).findByRole("button", { name: /Cache the plan lookups/ })
+    await expect(toggle).toHaveTextContent("Merge queue #2")
+  }
+}
+
+export const QueueWithoutPosition: StoryObj = {
+  render: row(
+    {
+      ...queuedCard,
+      review: "changes_requested",
+      queue: { state: Text.make("awaiting_checks"), position: null }
+    },
+    false
+  ),
+  play: async ({ canvasElement }) => {
+    const toggle = await within(canvasElement).findByRole("button", { name: /Cache the plan lookups/ })
+    await expect(toggle).toHaveTextContent("Merge queue: awaiting_checks")
+    await expect(toggle).toHaveTextContent("Changes requested")
+  }
+}
+
+export const ReviewRequired: StoryObj = {
+  render: row({ ...queuedCard, review: "review_required", queue: null }, false),
+  play: async ({ canvasElement }) => {
+    const toggle = await within(canvasElement).findByRole("button", { name: /Cache the plan lookups/ })
+    await expect(toggle).toHaveTextContent("Review required")
   }
 }

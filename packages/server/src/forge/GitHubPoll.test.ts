@@ -1,6 +1,16 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Option } from "effect"
-import { changedIds, chunksOf, graphqlFailure, outOfBudget, resetAt, stampOf, uniqueById } from "./GitHubPoll.ts"
+import {
+  changedIds,
+  chunksOf,
+  graphqlFailure,
+  listDue,
+  outOfBudget,
+  paceOf,
+  resetAt,
+  stampOf,
+  uniqueById
+} from "./GitHubPoll.ts"
 
 const brief = (id: string, updatedAt: string, checks: string | null = null) => ({ id, updatedAt, checks })
 
@@ -58,5 +68,28 @@ describe("fetching only the pull requests that changed", () => {
   it("splits ids into batches GitHub accepts", () => {
     expect(chunksOf([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
     expect(chunksOf([], 50)).toEqual([])
+  })
+})
+
+const rate = (remaining: number) => ({ limit: 5000, remaining, resetAt: "2026-11-05T20:00:00Z" })
+
+describe("how fast to read GitHub as the account's budget runs down", () => {
+  it("reads at the usual pace with a fifth or more left, or when it does not know", () => {
+    expect(paceOf(rate(1000))).toBe("go")
+    expect(paceOf(null)).toBe("go")
+    expect(paceOf({ ...rate(0), limit: 0 })).toBe("go")
+  })
+
+  it("slows below a fifth and stops below a twentieth", () => {
+    expect(paceOf(rate(999))).toBe("slow")
+    expect(paceOf(rate(250))).toBe("slow")
+    expect(paceOf(rate(249))).toBe("stop")
+  })
+
+  it("reads a repository half as often while slowed", () => {
+    expect(listDue("go", 0, 1000, 60_000)).toBe(true)
+    expect(listDue("slow", undefined, 1000, 60_000)).toBe(true)
+    expect(listDue("slow", 0, 60_000, 60_000)).toBe(false)
+    expect(listDue("slow", 0, 90_000, 60_000)).toBe(true)
   })
 })

@@ -13,16 +13,16 @@ export const ReadyQueue = <M>(
     withBorder: true,
     radius: "lg",
     p: "md",
-    attributes: { root: { "aria-label": "Ready for you" } },
+    attributes: { root: { "aria-label": "Needs you" } },
     children: [
       ui.Stack(h, {
         gap: "lg",
         children: [
           ui.Group(h, {
             gap: "sm",
-            attributes: { root: { role: "heading", "aria-level": "2", "aria-label": `Ready for you, ${props.count}` } },
+            attributes: { root: { role: "heading", "aria-level": "2", "aria-label": `Needs you, ${props.count}` } },
             children: [
-              ui.Title(h, { order: 2, size: "h3", children: ["Ready for you"] }),
+              ui.Title(h, { order: 2, size: "h3", children: ["Needs you"] }),
               ui.Badge(h, {
                 size: "lg",
                 circle: true,

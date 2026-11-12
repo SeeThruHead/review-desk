@@ -1,12 +1,12 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Login, RepoSlug, SessionName, Text } from "@review-desk/contract/Ids.ts"
+import { Login, PrNumber, RepoSlug, SessionName, Text, Url } from "@review-desk/contract/Ids.ts"
 import { Branch, ForgeId } from "@review-desk/domain/Facts.ts"
-import { lee, fromAuthor, fromPerson, fromReviewer, pull, dana, thread } from "@review-desk/domain/Facts.testing.ts"
+import { at, lee, fromAuthor, fromPerson, fromReviewer, pull, dana, thread } from "@review-desk/domain/Facts.testing.ts"
 import { Option } from "effect"
 import type { LiveAgent } from "../agents/Agents.ts"
 import type { Records } from "../store/DeskRepo.ts"
 import { authorBrief } from "./Messages.ts"
-import { type Settings, plan } from "./Plan.ts"
+import { type Settings, deliveryNote, plan } from "./Plan.ts"
 
 const reviewerDesk: Settings = {
   desk: Login.make("dana"),
@@ -30,7 +30,9 @@ const empty: Records = {
   claimRoles: new Map(),
   triage: new Map(),
   known: new Map(),
-  seen: new Set()
+  seen: new Set(),
+  seenAt: new Map(),
+  delivered: new Map()
 }
 
 const agent = (name: string, branch: string, working = false): LiveAgent => ({
@@ -379,5 +381,115 @@ describe("claiming a pull request as its reviewer or its author", () => {
     expect(
       plan({ settings: wholeRepo, facts: [docs], records: empty, agents: [] }).routes.map((route) => route.session)
     ).toEqual(["api"])
+  })
+})
+
+describe("what the board says needs the person", () => {
+  const mine = pull(20, {
+    author: dana,
+    checks: "failed",
+    comments: [{ ...fromPerson(lee, "This breaks the login page"), at: at(30) }]
+  })
+  const authorOfMine: Settings = { ...reviewerDesk, roles: ["author", "reviewer"] }
+
+  it("marks his own pull request with why it needs him, and the last thing the desk delivered", () => {
+    const records: Records = {
+      ...empty,
+      delivered: new Map([[mine.key, { text: Text.make("Sent the CI failure"), at: at(31) }]])
+    }
+    const card = plan({ settings: authorOfMine, facts: [mine], records, agents: [] }).cards[0]
+
+    expect(card?.attention).toEqual({ why: "lee commented", at: at(30) })
+    expect(card?.delivered).toEqual({ text: "Sent the CI failure", at: at(31) })
+  })
+
+  it("clears it once he marks it seen", () => {
+    const records: Records = { ...empty, seenAt: new Map([[mine.key, at(59)]]) }
+
+    expect(plan({ settings: authorOfMine, facts: [mine], records, agents: [] }).cards[0]?.attention).toBeNull()
+  })
+
+  it("asks for him on a review request no area covers, and says routing is partly off", () => {
+    const uncovered = pull(21, { requested: [Login.make("dana")], files: [Text.make("docs/readme.md")] })
+    const steps = plan({ settings: reviewerDesk, facts: [uncovered, asked], records: empty, agents: [] })
+
+    expect(steps.cards[0]?.attention?.why).toBe("Review requested of you; no agent area covers it")
+    expect(steps.cards[1]?.attention).toBeNull()
+    expect(steps.routing).toEqual({
+      on: true,
+      reason: "No area covers acme/api, so review requests there stay with you"
+    })
+  })
+
+  it("says routing is off when no areas are configured, and on when every request is covered", () => {
+    expect(
+      plan({ settings: { ...reviewerDesk, areas: [] }, facts: [asked], records: empty, agents: [] }).routing
+    ).toEqual({ on: false, reason: "No areas configured, so review requests stay with you" })
+    expect(plan({ settings: reviewerDesk, facts: [asked], records: empty, agents: [] }).routing).toEqual({
+      on: true,
+      reason: null
+    })
+  })
+
+  it("notices a pull request that left the merge queue without merging, once it saw it there", () => {
+    const queued = {
+      ...mine,
+      checks: "passed" as const,
+      comments: [],
+      queue: { state: Text.make("queued"), position: null }
+    }
+    const known: Records = { ...empty, known: new Map([[mine.key, "passed"]]) }
+    const first = plan({ settings: authorOfMine, facts: [queued], records: known, agents: [] })
+    const remembered = first.remember.flatMap((entry) => entry.items.map((item) => `${entry.pull.key} ${item}`))
+    const after: Records = { ...known, seen: new Set(remembered) }
+    const left = plan({ settings: authorOfMine, facts: [{ ...queued, queue: null }], records: after, agents: [] })
+
+    expect(remembered).toContain(`${mine.key} q:${mine.headSha}`)
+    expect(left.cards[0]?.attention?.why).toBe("Removed from the merge queue")
+    expect(
+      plan({ settings: authorOfMine, facts: [{ ...queued, queue: null, state: "merged" }], records: after, agents: [] })
+        .cards[0]?.attention
+    ).toBeNull()
+    expect(
+      plan({ settings: authorOfMine, facts: [queued], records: empty, agents: [] }).remember.flatMap(
+        (entry) => entry.items
+      )
+    ).not.toContain(`q:${mine.headSha}`)
+  })
+
+  it("shows mentions on pull requests and issues outside his own and his reviews, and never routes them", () => {
+    const elsewhere = pull(22, { comments: [{ ...fromPerson(lee, "@dana is this right?"), at: at(12) }] })
+    const issue = {
+      forge: "github" as const,
+      repo: RepoSlug.make("acme/api"),
+      number: PrNumber.make(40),
+      id: ForgeId.make("40"),
+      title: Text.make("Flaky deploy"),
+      body: Text.make("@dana have a look"),
+      url: Url.make("https://github.com/acme/api/issues/40"),
+      author: lee,
+      createdAt: at(3),
+      comments: []
+    }
+    const seen: Records = { ...empty, seenAt: new Map([["github:acme/api#40", at(4)]]) }
+    const steps = plan({
+      settings: reviewerDesk,
+      facts: [elsewhere, asked],
+      issues: [issue],
+      records: seen,
+      agents: []
+    })
+
+    expect(steps.mentions.map((mention) => [mention.key, mention.attention?.why ?? null])).toEqual([
+      [elsewhere.key, "lee mentioned you"],
+      ["github:acme/api#40", null]
+    ])
+    expect(steps.routes.map((route) => route.pull.key)).toEqual([asked.key])
+    expect(steps.deliveries).toEqual([])
+  })
+
+  it("describes what a delivery carried", () => {
+    expect(deliveryNote(2, { failedChecks: true, pushed: false })).toBe("the CI failure and 2 comments")
+    expect(deliveryNote(1, { failedChecks: false, pushed: true })).toBe("the new commits and 1 comment")
   })
 })

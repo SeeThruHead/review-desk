@@ -17,3 +17,15 @@ export const OpenInSidediff = Command.define("OpenInSidediff", {
       Effect.catch((error) => Effect.succeed(Message.FailedToOpenInSidediff({ reason: Text.make(error.message) })))
     )
 })
+
+export const MarkSeen = Command.define("MarkSeen", {
+  args: { key: PrKey },
+  messages: [Message.MarkedSeen, Message.FailedToMarkSeen],
+  execute: ({ key }) =>
+    Effect.gen(function* () {
+      const desk = yield* DeskClient
+      yield* desk.markSeen(key)
+
+      return Message.MarkedSeen()
+    }).pipe(Effect.catch((error) => Effect.succeed(Message.FailedToMarkSeen({ reason: Text.make(error.message) }))))
+})

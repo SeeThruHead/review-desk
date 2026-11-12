@@ -186,6 +186,8 @@ export const factsOf = (repo: RepoSlug, pull: PullJson, details: Details): PullF
   files: details.files.map((file) => Text.make(file.filename)),
   checks: checksOf(details.status),
   mergeable: pull.mergeable ? "yes" : "no",
+  review: null,
+  queue: null,
   reviews: details.reviews.map((review) => ({
     id: ForgeId.make(String(review.id)),
     author: loginOf(review.user),
@@ -387,6 +389,8 @@ export const giteaClient = Effect.fnUntraced(function* (url: string, token: stri
     runs,
     failedJobs,
     issues,
+    mentions: () => Effect.succeed([]),
+    budget: Effect.succeed(null),
     commentOnIssue,
     closeIssue,
     ownedRepos

@@ -2,6 +2,7 @@ import type {
   Activity,
   Agent,
   Card,
+  Delivered,
   Outcome,
   Relation,
   Role,
@@ -77,6 +78,7 @@ export type Context = {
   readonly triage: Triage | null
   readonly agent: Agent | null
   readonly relations: ReadonlyArray<Relation>
+  readonly delivered: Delivered | null
 }
 
 const sideOf = (role: Role): Side => (role === "reviewer" ? "reviewer" : "author")
@@ -180,6 +182,11 @@ export const cardOf = (facts: PullFacts, desk: Desk, context: Context): Card => 
     checks: facts.checks,
     updatedAt: facts.updatedAt,
     threads: threads.flatMap((entry) => viewOf(entry.thread, entry.state, context.role)),
-    activity: activityOf(facts)
+    activity: activityOf(facts),
+    claimed: context.claimed,
+    review: facts.review,
+    queue: facts.queue,
+    attention: null,
+    delivered: context.delivered
   }
 }

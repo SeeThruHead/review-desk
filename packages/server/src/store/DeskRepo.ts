@@ -1,5 +1,5 @@
-import { Role, Settled, Triage } from "@review-desk/contract/Board.ts"
-import { Forge, Login, type PrKey, RepoSlug, SessionName } from "@review-desk/contract/Ids.ts"
+import { type Delivered, Role, Settled, Triage } from "@review-desk/contract/Board.ts"
+import { Forge, IsoTime, Login, type PrKey, RepoSlug, SessionName, Text } from "@review-desk/contract/Ids.ts"
 import { SeenBranch } from "@review-desk/domain/Branches.ts"
 import type { IssueClaim } from "../desk/IssueWatch.ts"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
@@ -26,6 +26,8 @@ const TriageRow = Schema.Struct({
 })
 const PullRow = Schema.Struct({ pull: Schema.String, checks: Schema.String })
 const ItemRow = Schema.Struct({ pull: Schema.String, item: Schema.String })
+const SeenAtRow = Schema.Struct({ pull: Schema.String, at: IsoTime })
+const DeliveryRow = Schema.Struct({ pull: Schema.String, text: Text, at: IsoTime })
 const IssueClaimRow = Schema.Struct({
   id: Schema.String,
   forge: Forge,
@@ -50,6 +52,8 @@ export type Records = {
   readonly triage: ReadonlyMap<string, { readonly triage: Triage; readonly settled: ReadonlyArray<Settled> }>
   readonly known: ReadonlyMap<string, string>
   readonly seen: ReadonlySet<string>
+  readonly seenAt: ReadonlyMap<string, IsoTime>
+  readonly delivered: ReadonlyMap<string, Delivered>
 }
 
 const failed = Effect.mapError((cause: unknown) => new DeskRepoError({ cause }))
@@ -72,6 +76,8 @@ export class DeskRepo extends Context.Service<
     readonly releaseIssues: (id: string) => Effect.Effect<boolean, DeskRepoError>
     readonly markBaselined: (id: string) => Effect.Effect<void, DeskRepoError>
     readonly rememberIssueItems: (id: string, items: ReadonlyArray<string>) => Effect.Effect<void, DeskRepoError>
+    readonly markSeen: (pull: PrKey) => Effect.Effect<void, DeskRepoError>
+    readonly noteDelivery: (pull: PrKey, text: string) => Effect.Effect<void, DeskRepoError>
   }
 >()("review-desk/server/DeskRepo") {
   static readonly layer = Layer.effect(
@@ -81,7 +87,7 @@ export class DeskRepo extends Context.Service<
       const now = Effect.map(DateTime.now, DateTime.formatIso)
 
       const records = Effect.gen(function* () {
-        const [claims, roles, triage, pulls, items] = yield* Effect.all([
+        const [claims, roles, triage, pulls, items, seenAt, delivered] = yield* Effect.all([
           sql`SELECT pull, session FROM claims`.pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ClaimRow)))
           ),
@@ -92,7 +98,13 @@ export class DeskRepo extends Context.Service<
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(TriageRow)))
           ),
           sql`SELECT pull, checks FROM pulls`.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(PullRow)))),
-          sql`SELECT pull, item FROM seen_items`.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ItemRow))))
+          sql`SELECT pull, item FROM seen_items`.pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ItemRow)))
+          ),
+          sql`SELECT pull, at FROM seen_at`.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(SeenAtRow)))),
+          sql`SELECT pull, text, at FROM deliveries`.pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(DeliveryRow)))
+          )
         ])
 
         return {
@@ -105,7 +117,9 @@ export class DeskRepo extends Context.Service<
             ])
           ),
           known: new Map(pulls.map((row) => [row.pull, row.checks])),
-          seen: new Set(items.map((row) => `${row.pull} ${row.item}`))
+          seen: new Set(items.map((row) => `${row.pull} ${row.item}`)),
+          seenAt: new Map(seenAt.map((row) => [row.pull, row.at])),
+          delivered: new Map(delivered.map((row) => [row.pull, { text: row.text, at: row.at }]))
         }
       }).pipe(failed, Effect.withSpan("DeskRepo.records"))
 
@@ -208,6 +222,18 @@ export class DeskRepo extends Context.Service<
         )
       }, failed)
 
+      const markSeen = Effect.fn("DeskRepo.markSeen")(function* (pull: PrKey) {
+        const at = yield* now
+        yield* sql`INSERT INTO seen_at (pull, at) VALUES (${pull}, ${at})
+          ON CONFLICT (pull) DO UPDATE SET at = excluded.at`
+      }, failed)
+
+      const noteDelivery = Effect.fn("DeskRepo.noteDelivery")(function* (pull: PrKey, text: string) {
+        const at = yield* now
+        yield* sql`INSERT INTO deliveries (pull, text, at) VALUES (${pull}, ${text}, ${at})
+          ON CONFLICT (pull) DO UPDATE SET text = excluded.text, at = excluded.at`
+      }, failed)
+
       return DeskRepo.of({
         records,
         claim,
@@ -219,7 +245,9 @@ export class DeskRepo extends Context.Service<
         claimIssues,
         releaseIssues,
         markBaselined,
-        rememberIssueItems
+        rememberIssueItems,
+        markSeen,
+        noteDelivery
       })
     })
   )

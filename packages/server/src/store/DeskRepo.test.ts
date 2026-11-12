@@ -33,6 +33,20 @@ describe("the desk's own records", () => {
       })
     )
 
+    it.effect("keeps when each pull request was last marked seen and what the desk last delivered on it", () =>
+      Effect.gen(function* () {
+        const repo = yield* DeskRepo
+        const other = PrKey.make("github:acme/api#9")
+        yield* repo.markSeen(other)
+        yield* repo.noteDelivery(other, "Sent the CI failure")
+        yield* repo.noteDelivery(other, "Sent 2 comments")
+        const records = yield* repo.records
+
+        expect(records.seenAt.get(other)).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+        expect(records.delivered.get(other)?.text).toBe("Sent 2 comments")
+      })
+    )
+
     it.effect("remembers what each branch's CI has done, replacing it on every look", () =>
       Effect.gen(function* () {
         const repo = yield* DeskRepo

@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
-import { Board, Role, Settled, Verdict } from "./Board.ts"
+import { Board, Health, Role, Routing, Settled, Verdict } from "./Board.ts"
 import { Count, Forge, Login, PrKey, RepoSlug, SessionName, Text, Url } from "./Ids.ts"
 
 export class UnknownPull extends Schema.TaggedError<UnknownPull, { readonly brand: unique symbol }>()("UnknownPull", {
@@ -77,7 +77,25 @@ export const IssueClaimRequest = Schema.Struct({
 })
 export type IssueClaimRequest = typeof IssueClaimRequest.Type
 
-export const Summary = Schema.Struct({ ready: Count, working: Count, talking: Count })
+export const SummarySection = Schema.Literals(["reviewing", "mine", "mentions"])
+export type SummarySection = typeof SummarySection.Type
+
+export const SectionCount = Schema.Struct({ total: Count, needsYou: Count })
+export type SectionCount = typeof SectionCount.Type
+
+export const NeedItem = Schema.Struct({ key: PrKey, title: Text, url: Url, section: SummarySection, why: Text })
+export type NeedItem = typeof NeedItem.Type
+
+export const Summary = Schema.Struct({
+  needsYou: Count,
+  reviewing: SectionCount,
+  mine: SectionCount,
+  mentions: SectionCount,
+  agents: Schema.Struct({ working: Count, talking: Count }),
+  top: Schema.Array(NeedItem),
+  health: Health,
+  routing: Routing
+})
 export type Summary = typeof Summary.Type
 
 export const TriageReport = Schema.Struct({
@@ -110,6 +128,7 @@ export const DeskRpcs = RpcGroup.make(
     success: Schema.Struct({ forges: Schema.Array(Forge) }),
     error: NotConfigured
   }),
+  Rpc.make("MarkSeen", { payload: { key: PrKey }, error: UnknownPull }),
   Rpc.make("ReleaseIssues", {
     payload: { repo: RepoSlug, machine: Schema.NullOr(Schema.String), pane: Schema.String },
     success: Schema.Struct({ released: Count })

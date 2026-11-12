@@ -1,7 +1,7 @@
 import * as Command from "foldkit/command"
 import * as ScrollArea from "@seethruhead/sth-ui/core/components/ScrollArea/model.ts"
 import type { DeskClient } from "./client.ts"
-import { OpenInSidediff } from "./commands.ts"
+import { MarkSeen, OpenInSidediff } from "./commands.ts"
 import { Message } from "./message.ts"
 import type { Model } from "./model.ts"
 
@@ -18,6 +18,9 @@ export const update = (model: Model, message: Message): Update =>
     OpenedInSidediff: () => ({ model: { ...model, notice: null } }),
     FailedToOpenInSidediff: ({ reason }) => ({ model: { ...model, notice: reason } }),
     DismissedNotice: () => ({ model: { ...model, notice: null } }),
+    ClickedSeen: ({ key }) => ({ model, commands: [MarkSeen({ key })] }),
+    MarkedSeen: () => ({ model }),
+    FailedToMarkSeen: ({ reason }) => ({ model: { ...model, notice: reason } }),
     GotSidebarScroll: ({ message: inner }) => {
       const scrolled = ScrollArea.update(model.sidebar, inner)
 

@@ -13,6 +13,9 @@ export const Message = defineMessageUnion({
   DismissedNotice: {},
   ChangedOpenPulls: { shown: Schema.Array(PrKey), open: Schema.Array(PrKey) },
   ToggledSettled: { key: PrKey, open: Schema.Boolean },
+  ClickedSeen: { key: PrKey },
+  MarkedSeen: {},
+  FailedToMarkSeen: { reason: Text },
   GotSidebarScroll: { message: ScrollArea.Message }
 })
 export type Message = typeof Message.Type

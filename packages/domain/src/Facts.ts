@@ -1,4 +1,4 @@
-import { Checks } from "@review-desk/contract/Board.ts"
+import { Checks, MergeQueue, ReviewDecision } from "@review-desk/contract/Board.ts"
 import { Forge, IsoTime, Login, PrKey, PrNumber, RepoSlug, Text, Url } from "@review-desk/contract/Ids.ts"
 import { Schema } from "effect"
 
@@ -11,7 +11,14 @@ export type ForgeId = typeof ForgeId.Type
 export const Branch = Schema.String.pipe(Schema.brand("Branch"))
 export type Branch = typeof Branch.Type
 
-export const Comment = Schema.Struct({ id: ForgeId, author: Login, body: Text, at: IsoTime, url: Url })
+export const Comment = Schema.Struct({
+  id: ForgeId,
+  author: Login,
+  body: Text,
+  at: IsoTime,
+  url: Url,
+  bot: Schema.optionalKey(Schema.Boolean)
+})
 export type Comment = typeof Comment.Type
 
 export const Thread = Schema.Struct({
@@ -31,7 +38,8 @@ export const Review = Schema.Struct({
   state: ReviewState,
   body: Text,
   at: IsoTime,
-  url: Url
+  url: Url,
+  bot: Schema.optionalKey(Schema.Boolean)
 })
 export type Review = typeof Review.Type
 
@@ -58,9 +66,12 @@ export const PullFacts = Schema.Struct({
   files: Schema.Array(Text),
   checks: Checks,
   mergeable: Mergeable,
+  review: Schema.NullOr(ReviewDecision),
+  queue: Schema.NullOr(MergeQueue),
   reviews: Schema.Array(Review),
   threads: Schema.Array(Thread),
   comments: Schema.Array(Comment),
+  createdAt: Schema.optionalKey(IsoTime),
   updatedAt: IsoTime
 })
 export type PullFacts = typeof PullFacts.Type
@@ -75,6 +86,7 @@ export const IssueFacts = Schema.Struct({
   url: Url,
   author: Login,
   createdAt: IsoTime,
-  comments: Schema.Array(Comment)
+  comments: Schema.Array(Comment),
+  updatedAt: Schema.optionalKey(IsoTime)
 })
 export type IssueFacts = typeof IssueFacts.Type

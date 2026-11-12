@@ -55,6 +55,18 @@ export const AgentSide = Schema.Literals(["reviewer", "author"])
 export const Activity = Schema.Struct({ side: AgentSide, text: Text, at: IsoTime })
 export type Activity = typeof Activity.Type
 
+export const ReviewDecision = Schema.Literals(["approved", "changes_requested", "review_required"])
+export type ReviewDecision = typeof ReviewDecision.Type
+
+export const MergeQueue = Schema.Struct({ state: Text, position: Schema.NullOr(Count) })
+export type MergeQueue = typeof MergeQueue.Type
+
+export const Attention = Schema.Struct({ why: Text, at: IsoTime })
+export type Attention = typeof Attention.Type
+
+export const Delivered = Schema.Struct({ text: Text, at: IsoTime })
+export type Delivered = typeof Delivered.Type
+
 export const Card = Schema.Struct({
   key: PrKey,
   forge: Forge,
@@ -75,15 +87,59 @@ export const Card = Schema.Struct({
   checks: Checks,
   updatedAt: IsoTime,
   threads: Schema.optionalKey(Schema.Array(ThreadView)),
-  activity: Schema.optionalKey(Schema.NullOr(Activity))
+  activity: Schema.optionalKey(Schema.NullOr(Activity)),
+  claimed: Schema.Boolean,
+  review: Schema.NullOr(ReviewDecision),
+  queue: Schema.NullOr(MergeQueue),
+  attention: Schema.NullOr(Attention),
+  delivered: Schema.NullOr(Delivered)
 })
 export type Card = typeof Card.Type
+
+export const MentionKind = Schema.Literals(["pull", "issue"])
+export type MentionKind = typeof MentionKind.Type
+
+export const Mention = Schema.Struct({
+  key: PrKey,
+  kind: MentionKind,
+  forge: Forge,
+  repo: RepoSlug,
+  number: PrNumber,
+  title: Text,
+  url: Url,
+  by: Login,
+  text: Text,
+  at: IsoTime,
+  attention: Schema.NullOr(Attention)
+})
+export type Mention = typeof Mention.Type
+
+export const HealthState = Schema.Literals(["live", "stale", "paused"])
+export type HealthState = typeof HealthState.Type
+
+export const Health = Schema.Struct({
+  state: HealthState,
+  reason: Schema.NullOr(Text),
+  lastGood: Schema.NullOr(IsoTime),
+  until: Schema.NullOr(IsoTime)
+})
+export type Health = typeof Health.Type
+
+export const Routing = Schema.Struct({ on: Schema.Boolean, reason: Schema.NullOr(Text) })
+export type Routing = typeof Routing.Type
+
+export const Budget = Schema.Struct({ remaining: Count, limit: Count, resetAt: IsoTime, slowed: Schema.Boolean })
+export type Budget = typeof Budget.Type
 
 export const Board = Schema.Struct({
   desk: Login,
   cards: Schema.Array(Card),
   ready: Schema.Array(PrKey),
   sidediff: Schema.Boolean,
-  polledAt: Schema.NullOr(IsoTime)
+  polledAt: Schema.NullOr(IsoTime),
+  mentions: Schema.Array(Mention),
+  health: Health,
+  routing: Routing,
+  budget: Schema.NullOr(Budget)
 })
 export type Board = typeof Board.Type

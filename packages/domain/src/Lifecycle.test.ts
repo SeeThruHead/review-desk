@@ -5,7 +5,15 @@ import { type Context, cardOf, threadState } from "./Lifecycle.ts"
 
 const desk = { logins: ["dana", "dana-gitea"], limit: 3, intakeLabel: "agent-review" }
 
-const reviewing: Context = { role: "reviewer", trusted: true, claimed: false, triage: null, agent: null, relations: [] }
+const reviewing: Context = {
+  role: "reviewer",
+  trusted: true,
+  claimed: false,
+  triage: null,
+  agent: null,
+  relations: [],
+  delivered: null
+}
 
 const authoring: Context = { ...reviewing, role: "author" }
 

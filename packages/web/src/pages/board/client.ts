@@ -21,6 +21,7 @@ export class DeskClient extends Context.Service<
     readonly openInSidediff: (
       key: PrKey
     ) => Effect.Effect<void, SidediffFailed | UnknownPull | NotConfigured | DeskOffline>
+    readonly markSeen: (key: PrKey) => Effect.Effect<void, UnknownPull | DeskOffline>
   }
 >()("review-desk/web/DeskClient") {
   static readonly layerNoDeps = Layer.effect(
@@ -31,7 +32,9 @@ export class DeskClient extends Context.Service<
       return DeskClient.of({
         watchBoard: client.WatchBoard().pipe(Stream.mapError(() => new DeskOffline())),
         openInSidediff: (key) =>
-          client.OpenInSidediff({ key }).pipe(Effect.catchTag("RpcClientError", () => Effect.fail(new DeskOffline())))
+          client.OpenInSidediff({ key }).pipe(Effect.catchTag("RpcClientError", () => Effect.fail(new DeskOffline()))),
+        markSeen: (key) =>
+          client.MarkSeen({ key }).pipe(Effect.catchTag("RpcClientError", () => Effect.fail(new DeskOffline())))
       })
     })
   )

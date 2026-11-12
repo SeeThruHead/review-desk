@@ -7,7 +7,7 @@ import {
   PostFailed,
   RoundLimitReached,
   SidediffFailed,
-  type Summary,
+  Summary,
   type TriageReport,
   UnknownPull
 } from "@review-desk/contract/Contract.ts"
@@ -20,40 +20,41 @@ import {
   type RepoSlug,
   type SessionName,
   Text,
-  Url
+  Url,
+  prKey
 } from "@review-desk/contract/Ids.ts"
 import { type BranchChange, type SeenBranch, branchChanges } from "@review-desk/domain/Branches.ts"
-import type { PullFacts, Side, Thread } from "@review-desk/domain/Facts.ts"
+import type { IssueFacts, PullFacts, Side, Thread } from "@review-desk/domain/Facts.ts"
 import { threadState } from "@review-desk/domain/Lifecycle.ts"
 import { keyParts } from "@review-desk/domain/Keys.ts"
 import { issueStamp, markerOf, stamp } from "@review-desk/domain/Protocol.ts"
-import { countIn } from "@review-desk/domain/Queue.ts"
+import { summaryOf } from "@review-desk/domain/Summary.ts"
 import {
   Context,
   DateTime,
   Duration,
   Effect,
-  Equivalence,
   Layer,
   Option,
   Ref,
   Schedule,
+  Schema,
   Semaphore,
   Stream,
-  Struct,
   SubscriptionRef
 } from "effect"
 import { Agents, type LiveAgent } from "../agents/Agents.ts"
 import { type AgentTarget, targetFor } from "../agents/Remote.ts"
 import { DeskConfig } from "../config/DeskConfig.ts"
-import { type BranchRuns, Forges } from "../forge/Forge.ts"
+import { type BranchRuns, type ForgeError, Forges } from "../forge/Forge.ts"
 import { Shell } from "../platform/Shell.ts"
 import { DeskRepo } from "../store/DeskRepo.ts"
 import { type Reported, type Watched, branchMessage, watchedBranches } from "./BranchWatch.ts"
 import { claimId, issuePlan } from "./IssueWatch.ts"
 import { type RepoRef, withDiscovered } from "./Repos.ts"
+import { type Failure, crashed, healthAfter, overdue, starting } from "./Health.ts"
 import { authorBrief, routingBrief } from "./Messages.ts"
-import { areaFor, plan, roleOf } from "./Plan.ts"
+import { areaFor, plan, roleOf, routingOf } from "./Plan.ts"
 
 const markerRounds = (thread: Thread | undefined, side: Side): number =>
   Math.max(
@@ -95,15 +96,36 @@ const jobsFor =
 const placeOf = (target: AgentTarget): string =>
   target.machine === null ? target.pane : `${target.pane} on ${target.machine}`
 
-const sameCount = Equivalence.strictEqual<Count>()
+const sameSummary = Schema.toEquivalence(Summary)
 
-const sameSummary = Struct.makeEquivalence({ ready: sameCount, working: sameCount, talking: sameCount })
-
-export const summaryOf = (board: Board): Summary => ({
-  ready: Count.make(board.ready.length),
-  working: Count.make(countIn(board.cards, "working")),
-  talking: Count.make(board.cards.filter((card) => card.stage === "talking").length)
+const failureOf = (error: ForgeError): Failure => ({
+  message: error.message,
+  paused: error.paused === true,
+  until: error.until ?? null
 })
+
+type Fetched<A> = { readonly found: ReadonlyArray<A>; readonly failure: Failure | null }
+
+const isWatched = (facts: ReadonlyArray<PullFacts>, issues: ReadonlyArray<IssueFacts>, key: PrKey): boolean => {
+  if (facts.some((pull) => pull.key === key)) return true
+
+  return issues.some((issue) => prKey(issue.forge, issue.repo, issue.number) === key)
+}
+
+const lastCopy = <A extends { readonly forge: Forge; readonly repo: RepoSlug }>(
+  ref: Ref.Ref<ReadonlyArray<A>>,
+  entry: RepoRef,
+  error: ForgeError
+): Effect.Effect<Fetched<A>> =>
+  Effect.map(Ref.get(ref), (all) => ({
+    found: all.filter((item) => item.forge === entry.forge && item.repo === entry.slug),
+    failure: failureOf(error)
+  }))
+
+const logFailure = (entry: RepoRef, what: string) => (error: ForgeError) =>
+  error.paused === true
+    ? Effect.logDebug(`${error.message}; keeping the last copy of ${entry.slug}'s ${what}`)
+    : Effect.logWarning(`${error.message}; keeping the last copy of ${entry.slug}'s ${what}`)
 
 export class Desk extends Context.Service<
   Desk,
@@ -125,6 +147,7 @@ export class Desk extends Context.Service<
       request: IssueClaimRequest
     ) => Effect.Effect<{ readonly forges: ReadonlyArray<Forge> }, NotConfigured>
     readonly releaseIssues: (repo: RepoSlug, target: AgentTarget) => Effect.Effect<{ readonly released: Count }>
+    readonly markSeen: (key: PrKey) => Effect.Effect<void, UnknownPull>
   }
 >()("review-desk/server/Desk") {
   static readonly layer = Layer.effect(
@@ -140,10 +163,15 @@ export class Desk extends Context.Service<
         cards: [],
         ready: [],
         sidediff: config.sidediff !== null,
-        polledAt: null
+        polledAt: null,
+        mentions: [],
+        health: starting,
+        routing: routingOf(config, []),
+        budget: null
       }
       const boardRef = yield* SubscriptionRef.make(empty)
       const factsRef = yield* Ref.make<ReadonlyArray<PullFacts>>([])
+      const issuesRef = yield* Ref.make<ReadonlyArray<IssueFacts>>([])
       const lock = yield* Semaphore.make(1)
 
       const reposRef = yield* Ref.make<ReadonlyArray<RepoRef>>(config.repos)
@@ -155,27 +183,35 @@ export class Desk extends Context.Service<
         yield* Ref.set(reposRef, withDiscovered(config.repos, "gitea", owned))
       }).pipe(Effect.catch((error) => Effect.logWarning(`${error.message}; keeping the last list of repositories`)))
 
-      const fetchRepo = (entry: RepoRef) => {
+      const fetchRepo = (entry: RepoRef): Effect.Effect<Fetched<PullFacts>> => {
         const client = forges[entry.forge]
-        if (client === null) return Effect.succeed([])
+        if (client === null) return Effect.succeed({ found: [], failure: null })
 
         return client.pulls(entry.slug).pipe(
-          Effect.tapError((error) =>
-            error.paused === true
-              ? Effect.logDebug(`${error.message}; keeping the last copy of ${entry.slug}`)
-              : Effect.logWarning(`${error.message}; keeping the last copy of ${entry.slug}`)
-          ),
-          Effect.catch(() =>
-            Effect.map(Ref.get(factsRef), (facts) =>
-              facts.filter((pull) => pull.forge === entry.forge && pull.repo === entry.slug)
-            )
-          )
+          Effect.map((found) => ({ found, failure: null })),
+          Effect.tapError(logFailure(entry, "pull requests")),
+          Effect.catch((error) => lastCopy(factsRef, entry, error))
         )
       }
 
-      const fetchFacts = Effect.flatMap(Ref.get(reposRef), (repos) =>
-        Effect.forEach(repos, fetchRepo, { concurrency: 2 })
-      ).pipe(Effect.map((all) => all.flat()))
+      const fetchMentions = (entry: RepoRef): Effect.Effect<Fetched<IssueFacts>> => {
+        const client = forges[entry.forge]
+        if (client === null) return Effect.succeed({ found: [], failure: null })
+
+        return client.mentions(entry.slug).pipe(
+          Effect.map((found) => ({ found, failure: null })),
+          Effect.tapError(logFailure(entry, "mentions")),
+          Effect.catch((error) => lastCopy(issuesRef, entry, error))
+        )
+      }
+
+      const fetchAll = <A>(fetch: (entry: RepoRef) => Effect.Effect<Fetched<A>>) =>
+        Effect.flatMap(Ref.get(reposRef), (repos) => Effect.forEach(repos, fetch, { concurrency: 2 })).pipe(
+          Effect.map((all) => ({
+            found: all.flatMap((one) => one.found),
+            failures: all.flatMap((one) => (one.failure === null ? [] : [one.failure]))
+          }))
+        )
 
       const liveAgents = agents.list.pipe(
         Effect.tapError((error) => Effect.logWarning(error.message)),
@@ -191,6 +227,7 @@ export class Desk extends Context.Service<
             agents.prompt(route.target, route.message).pipe(
               Effect.andThen(repo.claim(route.pull.key, route.session, "reviewer")),
               Effect.andThen(repo.remember(route.pull.key, route.pull.checks, route.items)),
+              Effect.andThen(repo.noteDelivery(route.pull.key, `Sent to ${route.session} for review`)),
               Effect.tap(() =>
                 Effect.logInfo(`routed ${route.pull.key} to ${route.session} (${placeOf(route.target)})`)
               ),
@@ -203,6 +240,7 @@ export class Desk extends Context.Service<
           (delivery) =>
             agents.prompt(delivery.agent, delivery.message).pipe(
               Effect.andThen(repo.remember(delivery.pull.key, delivery.pull.checks, delivery.items)),
+              Effect.andThen(repo.noteDelivery(delivery.pull.key, delivery.note)),
               Effect.tap(() =>
                 Effect.logInfo(
                   `delivered ${delivery.items.length} updates on ${delivery.pull.key} to ${placeOf(delivery.agent)}`
@@ -317,29 +355,72 @@ export class Desk extends Context.Service<
         Effect.withSpan("Desk.watchIssues")
       )
 
+      const budgetNow = forges.github === null ? Effect.succeed(null) : forges.github.budget
+
+      const publish = Effect.fnUntraced(function* (
+        settings: typeof config,
+        live: ReadonlyArray<LiveAgent>,
+        failures: ReadonlyArray<Failure> | null
+      ) {
+        const facts = yield* Ref.get(factsRef)
+        const issues = yield* Ref.get(issuesRef)
+        const records = yield* repo.records
+        const steps = plan({ settings, facts, issues, records, agents: live })
+        const polledAt = yield* now
+        const budget = yield* budgetNow
+        yield* SubscriptionRef.update(boardRef, (before) => ({
+          ...empty,
+          cards: steps.cards,
+          ready: steps.ready,
+          mentions: steps.mentions,
+          routing: steps.routing,
+          budget,
+          polledAt: failures === null ? before.polledAt : polledAt,
+          health: failures === null ? before.health : healthAfter(failures, before.health, polledAt)
+        }))
+      })
+
+      const liveRef = yield* Ref.make<ReadonlyArray<LiveAgent>>([])
+
       const cycle = lock
         .withPermits(1)(
           Effect.gen(function* () {
             yield* discover
             const settings = { ...config, repos: yield* Ref.get(reposRef) }
-            const [facts, live] = yield* Effect.all([fetchFacts, liveAgents], { concurrency: 2 })
-            yield* Ref.set(factsRef, facts)
+            const [pulls, live] = yield* Effect.all([fetchAll(fetchRepo), liveAgents], { concurrency: 2 })
+            const mentioned = yield* fetchAll(fetchMentions)
+            yield* Ref.set(factsRef, pulls.found)
+            yield* Ref.set(issuesRef, mentioned.found)
+            yield* Ref.set(liveRef, live)
             const before = yield* repo.records
-            yield* execute(plan({ settings, facts, records: before, agents: live }))
-            yield* watchBranches(settings, facts, live)
+            yield* execute(plan({ settings, facts: pulls.found, records: before, agents: live }))
+            yield* watchBranches(settings, pulls.found, live)
             yield* watchIssues
-            const after = yield* repo.records
-            const steps = plan({ settings, facts, records: after, agents: live })
-            const polledAt = yield* now
-            yield* SubscriptionRef.set(boardRef, { ...empty, cards: steps.cards, ready: steps.ready, polledAt })
+            yield* publish(settings, live, [...pulls.failures, ...mentioned.failures])
           })
         )
         .pipe(
-          Effect.catchCause((cause) => Effect.logError("poll failed", cause)),
+          Effect.catchCause((cause) =>
+            Effect.logError("poll failed", cause).pipe(
+              Effect.andThen(
+                SubscriptionRef.update(boardRef, (before) => ({ ...before, health: crashed(before.health) }))
+              )
+            )
+          ),
           Effect.withSpan("Desk.cycle")
         )
 
+      const watchdog = Effect.gen(function* () {
+        const clock = yield* DateTime.now
+        const millis = DateTime.toEpochMillis(clock)
+        yield* SubscriptionRef.update(boardRef, (before) => ({
+          ...before,
+          health: overdue(before.health, millis, config.pollSeconds)
+        }))
+      })
+
       yield* Effect.forkScoped(Effect.repeat(cycle, Schedule.spaced(Duration.seconds(config.pollSeconds))))
+      yield* Effect.forkScoped(Effect.repeat(watchdog, Schedule.spaced(Duration.seconds(30))))
 
       const refresh = Effect.asVoid(Effect.forkDetach(cycle))
 
@@ -491,6 +572,19 @@ export class Desk extends Context.Service<
           .pipe(Effect.mapError(failed))
       })
 
+      const markSeen = Effect.fn("Desk.markSeen")(function* (key: PrKey) {
+        yield* Effect.annotateCurrentSpan("pull", key)
+        const facts = yield* Ref.get(factsRef)
+        const issues = yield* Ref.get(issuesRef)
+        if (!isWatched(facts, issues, key)) return yield* new UnknownPull({ key })
+        yield* repo.markSeen(key).pipe(Effect.orDie)
+        const settings = { ...config, repos: yield* Ref.get(reposRef) }
+        const live = yield* Ref.get(liveRef)
+        yield* lock
+          .withPermits(1)(publish(settings, live, null))
+          .pipe(Effect.orDie)
+      })
+
       const board = Stream.concat(Stream.fromEffect(SubscriptionRef.get(boardRef)), SubscriptionRef.changes(boardRef))
 
       return Desk.of({
@@ -502,7 +596,8 @@ export class Desk extends Context.Service<
         postComment,
         openInSidediff,
         claimIssues,
-        releaseIssues
+        releaseIssues,
+        markSeen
       })
     })
   )

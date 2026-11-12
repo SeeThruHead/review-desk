@@ -21,6 +21,7 @@ export type PullListProps<M> = {
   readonly sidediff: boolean
   readonly onChange: (shown: ReadonlyArray<PrKey>, open: ReadonlyArray<PrKey>) => M
   readonly onOpenInSidediff: (key: PrKey) => M
+  readonly time: (iso: string) => string
 }
 
 const forgeName = { github: "GitHub", gitea: "Gitea" } as const
@@ -68,6 +69,20 @@ const Icon = <M>(h: HtmlBuilder<M>, card: Card): Html => {
 
 const desktopOnly = { base: "none", sm: "flex" }
 
+const sideName = { author: "author agent", reviewer: "reviewer agent" } as const
+
+const agentText = (card: Card, session: string): string =>
+  card.claimed ? `${session}, claimed as ${sideName[card.role]}` : session
+
+const reviewShown = {
+  approved: { color: "green", variant: "light", children: ["Approved"] },
+  changes_requested: { color: "red", variant: "light", children: ["Changes requested"] },
+  review_required: { color: "gray", variant: "light", children: ["Review required"] }
+} as const
+
+const queueText = (queue: NonNullable<Card["queue"]>): string =>
+  queue.position === null ? `Merge queue: ${queue.state}` : `Merge queue #${queue.position}`
+
 const Summary = <M>(h: HtmlBuilder<M>, card: Card): ReadonlyArray<Html> => [
   ui.Group(h, {
     wrap: "nowrap",
@@ -91,7 +106,10 @@ const Summary = <M>(h: HtmlBuilder<M>, card: Card): ReadonlyArray<Html> => [
             c: "dimmed",
             truncate: true,
             children: [`${card.repo}#${card.number} by ${card.author}`]
-          })
+          }),
+          ...(card.attention === null
+            ? []
+            : [ui.Text(h, { size: "xs", c: "orange", fw: 600, truncate: true, children: [card.attention.why] })])
         ]
       }),
       ui.Text(h, { size: "sm", w: 300, display: desktopOnly, children: [statusText(card)] }),
@@ -106,7 +124,11 @@ const Summary = <M>(h: HtmlBuilder<M>, card: Card): ReadonlyArray<Html> => [
             : [ui.Badge(h, { size: "sm", color: "red", variant: "light", children: ["Untrusted"] })]),
           ...(card.agent === null
             ? []
-            : [ui.Badge(h, { size: "sm", variant: "default", children: [card.agent.session] })]),
+            : [ui.Badge(h, { size: "sm", variant: "default", children: [agentText(card, card.agent.session)] })]),
+          ...(card.review === null ? [] : [ui.Badge(h, { size: "sm", ...reviewShown[card.review] })]),
+          ...(card.queue === null
+            ? []
+            : [ui.Badge(h, { size: "sm", color: "violet", variant: "light", children: [queueText(card.queue)] })]),
           ...(card.checks === "none" ? [] : [ChecksBadge(h, { checks: card.checks })])
         ]
       })
@@ -122,7 +144,7 @@ const agentParts = <M>(h: HtmlBuilder<M>, card: Card): ReadonlyArray<Html> => {
   return [AgentStatus(h, { agent: card.agent })]
 }
 
-const sideName = { reviewer: "The reviewer's agent said", author: "The author's agent said" } as const
+const saidName = { reviewer: "The reviewer's agent said", author: "The author's agent said" } as const
 
 const Details = <M>(h: HtmlBuilder<M>, card: Card, props: PullListProps<M>): ReadonlyArray<Html> => {
   const activity = card.activity ?? null
@@ -135,13 +157,22 @@ const Details = <M>(h: HtmlBuilder<M>, card: Card, props: PullListProps<M>): Rea
           ? []
           : [ui.Text(h, { size: "sm", c: "red", fw: 600, children: ["Untrusted: never sent to an agent"] })]),
         ...agentParts(h, card),
+        ...(card.delivered === null
+          ? []
+          : [
+              ui.Text(h, {
+                size: "sm",
+                c: "dimmed",
+                children: [`Last delivered to the agent: ${card.delivered.text}, ${props.time(card.delivered.at)}`]
+              })
+            ]),
         ...(activity === null
           ? []
           : [
               ui.Stack(h, {
                 gap: 4,
                 children: [
-                  ui.Text(h, { size: "xs", c: "dimmed", children: [sideName[activity.side]] }),
+                  ui.Text(h, { size: "xs", c: "dimmed", children: [saidName[activity.side]] }),
                   ui.Blockquote(h, { color: "gray", p: "xs", fz: "sm", children: [activity.text] })
                 ]
               })

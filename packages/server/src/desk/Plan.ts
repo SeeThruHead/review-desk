@@ -1,6 +1,7 @@
-import type { Agent, Board, Card, Role } from "@review-desk/contract/Board.ts"
-import type { SessionName } from "@review-desk/contract/Ids.ts"
-import type { PullFacts, Side } from "@review-desk/domain/Facts.ts"
+import type { Agent, Board, Card, Mention, Role, Routing } from "@review-desk/contract/Board.ts"
+import { type SessionName, Text } from "@review-desk/contract/Ids.ts"
+import { type Me, attentionOf, issueMention, pullMention } from "@review-desk/domain/Attention.ts"
+import type { IssueFacts, PullFacts, Side } from "@review-desk/domain/Facts.ts"
 import { cardOf, threadState } from "@review-desk/domain/Lifecycle.ts"
 import { markerOf } from "@review-desk/domain/Protocol.ts"
 import { readyOrder, relationsOf } from "@review-desk/domain/Relations.ts"
@@ -22,6 +23,7 @@ export type Inputs = {
   readonly facts: ReadonlyArray<PullFacts>
   readonly records: Records
   readonly agents: ReadonlyArray<LiveAgent>
+  readonly issues?: ReadonlyArray<IssueFacts>
 }
 
 export type Route = {
@@ -36,6 +38,7 @@ export type Delivery = {
   readonly pull: PullFacts
   readonly agent: AgentTarget
   readonly message: string
+  readonly note: string
   readonly items: ReadonlyArray<string>
 }
 
@@ -44,6 +47,8 @@ export type Remember = { readonly pull: PullFacts; readonly items: ReadonlyArray
 export type Plan = {
   readonly cards: ReadonlyArray<Card>
   readonly ready: Board["ready"]
+  readonly mentions: ReadonlyArray<Mention>
+  readonly routing: Routing
   readonly routes: ReadonlyArray<Route>
   readonly deliveries: ReadonlyArray<Delivery>
   readonly remember: ReadonlyArray<Remember>
@@ -57,7 +62,7 @@ const loginsOf = (settings: Settings): ReadonlyArray<string> => [settings.desk, 
 
 const isMe = (settings: Settings, login: string): boolean => loginsOf(settings).some((mine) => same(mine, login))
 
-const isAsked = (settings: Settings, pull: PullFacts): boolean => {
+export const isAsked = (settings: Settings, pull: PullFacts): boolean => {
   if (pull.requested.some((login) => isMe(settings, login))) return true
 
   return pull.labels.some((label) => label === settings.intakeLabel)
@@ -164,6 +169,15 @@ const forMe = (settings: Settings, side: Side, item: Keyed): boolean =>
     onSome: (marker) => marker.side !== side
   })
 
+const plural = (count: number, word: string): string => (count === 1 ? `1 ${word}` : `${count} ${word}s`)
+
+export const deliveryNote = (comments: number, change: { readonly failedChecks: boolean; readonly pushed: boolean }) =>
+  [
+    ...(change.failedChecks ? ["the CI failure"] : []),
+    ...(change.pushed ? ["the new commits"] : []),
+    ...(comments > 0 ? [plural(comments, "comment")] : [])
+  ].join(" and ")
+
 const brief = (settings: Settings): Brief => ({
   owner: settings.owner,
   limit: settings.roundLimit,
@@ -222,11 +236,86 @@ const deliveryOf = (
         pull,
         agent: { machine: agent.machine, pane: agent.pane },
         message: updateMessage(pull, role, wanted, { failedChecks, pushed }, brief(input.settings)),
+        note: `Sent ${deliveryNote(wanted.length, { failedChecks, pushed })}`,
         items: wanted.map((item) => item.key)
       }
     ],
     remember: [skipped]
   }
+}
+
+const queueKey = (pull: PullFacts): string => `q:${pull.headSha}`
+
+export const leftQueue = (records: Records, pull: PullFacts): boolean => {
+  if (pull.state !== "open" || pull.queue !== null) return false
+
+  return records.seen.has(`${pull.key} ${queueKey(pull)}`)
+}
+
+const queueMemory = (records: Records, pull: PullFacts): ReadonlyArray<Remember> => {
+  if (pull.queue === null || !records.known.has(pull.key)) return []
+
+  return [{ pull, items: [queueKey(pull)] }]
+}
+
+const uncoveredRepos = (settings: Settings, considered: ReadonlyArray<Considered>): ReadonlyArray<string> => [
+  ...new Set(
+    considered
+      .filter((entry) => entry.role === "reviewer" && entry.pull.state === "open" && isAsked(settings, entry.pull))
+      .filter((entry) => areaFor(settings, entry.pull) === undefined)
+      .map((entry) => entry.pull.repo)
+  )
+]
+
+export const routingOf = (settings: Settings, considered: ReadonlyArray<Considered>): Routing => {
+  if (settings.areas.length === 0)
+    return { on: false, reason: Text.make("No areas configured, so review requests stay with you") }
+  const uncovered = uncoveredRepos(settings, considered)
+  if (uncovered.length === 0) return { on: true, reason: null }
+
+  return {
+    on: true,
+    reason: Text.make(`No area covers ${uncovered.join(", ")}, so review requests there stay with you`)
+  }
+}
+
+const mentionsOf = (input: Inputs, me: Me, considered: ReadonlyArray<Considered>): ReadonlyArray<Mention> => {
+  const carded = new Set(considered.map((entry) => entry.pull.key))
+  const seenAt = (key: string) => input.records.seenAt.get(key) ?? null
+
+  return [
+    ...input.facts.filter((pull) => !carded.has(pull.key)).flatMap((pull) => pullMention(me, pull, seenAt(pull.key))),
+    ...(input.issues ?? []).flatMap((issue) =>
+      issueMention(me, issue, seenAt(`${issue.forge}:${issue.repo}#${issue.number}`))
+    )
+  ]
+}
+
+const cardFor = (input: Inputs, me: Me, entry: Considered): Card => {
+  const { pull } = entry
+  const card = cardOf(
+    pull,
+    { logins: me.logins, limit: input.settings.roundLimit, intakeLabel: input.settings.intakeLabel },
+    {
+      role: entry.role,
+      trusted: entry.trusted,
+      claimed: input.records.claims.has(pull.key),
+      triage: input.records.triage.get(pull.key)?.triage ?? null,
+      agent: entry.trusted ? cardAgent(pull, entry.role, input.records, input.agents) : null,
+      relations: relationsOf(pull, input.facts),
+      delivered: input.records.delivered.get(pull.key) ?? null
+    }
+  )
+  const look = {
+    facts: pull,
+    card,
+    me,
+    asked: isAsked(input.settings, pull),
+    covered: areaFor(input.settings, pull) !== undefined,
+    leftQueue: leftQueue(input.records, pull)
+  }
+
+  return { ...card, attention: attentionOf(look, input.records.seenAt.get(pull.key) ?? null) }
 }
 
 export const plan = (input: Inputs): Plan => {
@@ -235,28 +324,20 @@ export const plan = (input: Inputs): Plan => {
 
     return role === null ? [] : [{ pull, role, trusted: trustedPull(input.settings, pull, role) }]
   })
-  const desk = {
-    logins: loginsOf(input.settings),
-    limit: input.settings.roundLimit,
-    intakeLabel: input.settings.intakeLabel
-  }
-  const cards = considered.map((entry) =>
-    cardOf(entry.pull, desk, {
-      role: entry.role,
-      trusted: entry.trusted,
-      claimed: input.records.claims.has(entry.pull.key),
-      triage: input.records.triage.get(entry.pull.key)?.triage ?? null,
-      agent: entry.trusted ? cardAgent(entry.pull, entry.role, input.records, input.agents) : null,
-      relations: relationsOf(entry.pull, input.facts)
-    })
-  )
+  const me = { logins: loginsOf(input.settings) }
+  const cards = considered.map((entry) => cardFor(input, me, entry))
   const handled = considered.map((entry) => deliveryOf(input, entry))
 
   return {
     cards,
     ready: readyOrder(cards),
+    mentions: mentionsOf(input, me, considered),
+    routing: routingOf(input.settings, considered),
     routes: considered.flatMap((entry) => routeOf(input, entry)),
     deliveries: handled.flatMap((entry) => entry.deliveries),
-    remember: handled.flatMap((entry) => entry.remember)
+    remember: [
+      ...handled.flatMap((entry) => entry.remember),
+      ...considered.flatMap((entry) => queueMemory(input.records, entry.pull))
+    ]
   }
 }

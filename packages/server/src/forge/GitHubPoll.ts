@@ -51,3 +51,21 @@ export const uniqueById = <A extends { readonly id: string }>(found: ReadonlyArr
 
 export const chunksOf = <A>(items: ReadonlyArray<A>, size: number): ReadonlyArray<ReadonlyArray<A>> =>
   Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, index * size + size))
+
+export type RateLimit = { readonly limit: number; readonly remaining: number; readonly resetAt: string }
+
+export type Pace = "go" | "slow" | "stop"
+
+export const paceOf = (rate: RateLimit | null): Pace => {
+  if (rate === null || rate.limit <= 0) return "go"
+  const share = rate.remaining / rate.limit
+  if (share < 0.05) return "stop"
+
+  return share < 0.2 ? "slow" : "go"
+}
+
+export const listDue = (pace: Pace, lastMillis: number | undefined, nowMillis: number, intervalMillis: number) => {
+  if (pace !== "slow" || lastMillis === undefined) return true
+
+  return nowMillis - lastMillis >= intervalMillis * 1.5
+}

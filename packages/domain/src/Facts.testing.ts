@@ -26,6 +26,8 @@ export const pull = (number: number, overrides: Partial<PullFacts> = {}): PullFa
   files: [],
   checks: "passed",
   mergeable: "yes",
+  review: null,
+  queue: null,
   reviews: [],
   threads: [],
   comments: [],

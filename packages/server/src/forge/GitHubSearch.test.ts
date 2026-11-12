@@ -9,8 +9,13 @@ describe("which GitHub pull requests the desk reads", () => {
       requested: "repo:acme/api is:pr is:open review-requested:@me",
       reviewed: "repo:acme/api is:pr is:open reviewed-by:@me",
       labelled: 'repo:acme/api is:pr is:open label:"agent-review"',
-      merged: "repo:acme/api is:pr is:merged involves:@me sort:updated-desc"
+      merged: "repo:acme/api is:pr is:merged involves:@me sort:updated-desc",
+      mentioned: "repo:acme/api is:issue is:open mentions:@me sort:updated-desc"
     })
+  })
+
+  it("looks for issues that mention the owner only inside the configured repository", () => {
+    expect(searchesFor(RepoSlug.make("acme/api"), "agent-review").mentioned).toMatch(/^repo:acme\/api /)
   })
 
   it("keeps the first copy of a pull request that more than one search found", () => {

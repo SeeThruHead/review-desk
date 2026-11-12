@@ -1,17 +1,33 @@
 import { describe, expect, it } from "@effect/vitest"
 import {
   busyBoard,
+  issueMention,
   lookCard,
   mergedCard,
   quietBoard,
   reviewingCard,
-  talkingCard
+  talkingCard,
+  troubledBoard
 } from "@review-desk/contract/Sample.testing.ts"
-import { Text } from "@review-desk/contract/Ids.ts"
+import { Count, IsoTime, Text } from "@review-desk/contract/Ids.ts"
 import { Command, given, message, model, story } from "foldkit/story"
-import { OpenInSidediff } from "./commands.ts"
+import { MarkSeen, OpenInSidediff } from "./commands.ts"
 import { Message } from "./message.ts"
-import { connecting, polledText, readyCount, readyGroups, sectionsOf, workingCount } from "./model.ts"
+import {
+  budgetText,
+  connecting,
+  healthText,
+  mentionsOf,
+  needsCount,
+  otherNeeds,
+  polledText,
+  readyCount,
+  readyGroups,
+  routingText,
+  sectionsOf,
+  timeOf,
+  workingCount
+} from "./model.ts"
 import { HideAfterDelay, ScrollAreaCommandMessage } from "@seethruhead/sth-ui/core/components/ScrollArea/commands.ts"
 import * as ScrollArea from "@seethruhead/sth-ui/core/components/ScrollArea/model.ts"
 import { update } from "./update.ts"
@@ -119,8 +135,8 @@ describe("what goes where on the board", () => {
 
     const sections = sectionsOf(busyBoard)
     expect(sections.map((section) => [section.section, section.cards.map((card) => card.number)])).toEqual([
-      ["working", [218, 41]],
-      ["queue", [7, 43, 90, 3, 86]],
+      ["reviewing", [218, 3]],
+      ["mine", [41, 7, 91, 47, 43, 90, 86]],
       ["history", [201, 5]]
     ])
   })
@@ -132,13 +148,105 @@ describe("what goes where on the board", () => {
     const unordered = { ...busyBoard, ready: [] }
     expect(readyGroups(unordered).flatMap((group) => group.cards.map((card) => card.number))).toEqual([212, 215, 88])
     expect(sectionsOf(quietBoard).every((section) => section.cards.length === 0)).toBe(true)
-    expect(readyGroups({ ...quietBoard, cards: [{ ...reviewingCard, stage: "ready", triage: null }] })).toEqual([
-      { verdict: "look", cards: [{ ...reviewingCard, stage: "ready", triage: null }] }
+    const readyUntriaged = {
+      ...reviewingCard,
+      stage: "ready" as const,
+      triage: null,
+      attention: { why: Text.make("The agent's review is done"), at: IsoTime.make("2026-11-05T15:00:00Z") }
+    }
+    expect(readyGroups({ ...quietBoard, cards: [readyUntriaged] })).toEqual([
+      { verdict: "look", cards: [readyUntriaged] }
     ])
+    expect(readyGroups({ ...quietBoard, cards: [{ ...readyUntriaged, attention: null }] })).toEqual([])
   })
 
   it("says when the desk last checked, or that it has not yet", () => {
     expect(polledText({ ...busyBoard, polledAt: null })).toBe("Not checked yet")
     expect(polledText(busyBoard)).toMatch(/^Checked \d{1,2}:\d{2}/)
+  })
+})
+
+describe("marking something seen", () => {
+  it("asks the desk to clear it, and says so when the desk refuses", () => {
+    story(
+      update,
+      given(live),
+      message(Message.ClickedSeen({ key: issueMention.key })),
+      Command.expectExact(MarkSeen({ key: issueMention.key })),
+      Command.resolve(MarkSeen({ key: issueMention.key }), Message.MarkedSeen()),
+      model((m) => expect(m.notice).toBeNull()),
+      message(Message.ClickedSeen({ key: issueMention.key })),
+      Command.resolve(
+        MarkSeen({ key: issueMention.key }),
+        Message.FailedToMarkSeen({ reason: Text.make("Review Desk is not watching it") })
+      ),
+      model((m) => expect(m.notice).toBe("Review Desk is not watching it")),
+      Command.expectNone()
+    )
+  })
+})
+
+describe("what needs him", () => {
+  it("counts the ready reviews and everything else that needs him, newest first", () => {
+    expect(needsCount(busyBoard)).toBe(6)
+    expect(otherNeeds(busyBoard).map((need) => [need.place, need.why])).toEqual([
+      ["acme/api#310", "sam mentioned you"],
+      ["you/ui-kit#47", "Approved with CI passed: ready to merge"],
+      ["you/ui-kit#43", "CI failed and no agent is on it"]
+    ])
+    expect(needsCount(quietBoard)).toBe(0)
+  })
+
+  it("lists mentions newest first", () => {
+    expect(mentionsOf(busyBoard).map((mention) => mention.number)).toEqual([310, 77])
+  })
+})
+
+const at = (iso: string) => timeOf(iso)
+
+describe("saying whether the board is current", () => {
+  it("says nothing while live", () => {
+    expect(healthText(busyBoard)).toBeNull()
+    expect(routingText(busyBoard)).toBeNull()
+  })
+
+  it("says when it paused for the rate limit and when it reads again", () => {
+    expect(healthText(troubledBoard)).toBe(
+      `Paused: GitHub's rate limit for this account is spent, reading again at ${at("2026-11-05T20:12:00Z")}. Showing what was read at ${at("2026-11-05T19:45:00Z")}.`
+    )
+    expect(healthText({ ...troubledBoard, health: { ...troubledBoard.health, reason: null, until: null } })).toBe(
+      `Paused. Showing what was read at ${at("2026-11-05T19:45:00Z")}.`
+    )
+  })
+
+  it("says what failed when it is stale, and that nothing was read yet when it never was", () => {
+    const stale = { state: "stale" as const, reason: Text.make("github did not answer"), lastGood: null, until: null }
+
+    expect(healthText({ ...quietBoard, health: stale })).toBe("Nothing read from GitHub yet: github did not answer.")
+    expect(
+      healthText({ ...quietBoard, health: { ...stale, reason: null, lastGood: IsoTime.make("2026-11-05T19:45:00Z") } })
+    ).toBe(`Showing what was read at ${at("2026-11-05T19:45:00Z")}.`)
+  })
+
+  it("says when routing is off or partial", () => {
+    expect(routingText(troubledBoard)).toBe("Routing off: No areas configured, so review requests stay with you.")
+    expect(routingText({ ...quietBoard, routing: { on: true, reason: Text.make("No area covers acme/web") } })).toBe(
+      "Routing: No area covers acme/web."
+    )
+  })
+
+  it("shows the GitHub budget, and when it reads less often", () => {
+    expect(budgetText(busyBoard)).toBe("GitHub budget 4,210 of 5,000")
+    expect(budgetText(troubledBoard)).toBe(
+      `GitHub budget 0 of 5,000, reading less often until ${at("2026-11-05T20:12:00Z")}`
+    )
+    expect(budgetText(quietBoard)).toBeNull()
+    const budget = {
+      remaining: Count.make(900),
+      limit: Count.make(5000),
+      resetAt: IsoTime.make("2026-11-05T20:12:00Z"),
+      slowed: false
+    }
+    expect(budgetText({ ...busyBoard, budget })).toBe("GitHub budget 900 of 5,000")
   })
 })

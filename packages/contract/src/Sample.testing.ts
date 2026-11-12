@@ -1,4 +1,4 @@
-import type { Board, Card } from "./Board.ts"
+import type { Attention, Board, Card, Health, Mention, Routing } from "./Board.ts"
 import { Count, IsoTime, Login, PrKey, PrNumber, RepoSlug, SessionName, Text, Url, prKey } from "./Ids.ts"
 
 const desk = Login.make("dana")
@@ -20,19 +20,40 @@ const base = (
   url: Url.make(`https://github.com/${slug}/pull/${number}`)
 })
 
-const quiet: Pick<Card, "trusted" | "round" | "agent" | "triage" | "settled" | "openThreads" | "relations" | "checks"> =
-  {
-    trusted: true,
-    round: null,
-    agent: null,
-    triage: null,
-    settled: [],
-    openThreads: Count.make(0),
-    relations: [],
-    checks: "passed"
-  }
+const quiet: Pick<
+  Card,
+  | "trusted"
+  | "round"
+  | "agent"
+  | "triage"
+  | "settled"
+  | "openThreads"
+  | "relations"
+  | "checks"
+  | "claimed"
+  | "review"
+  | "queue"
+  | "attention"
+  | "delivered"
+> = {
+  trusted: true,
+  round: null,
+  agent: null,
+  triage: null,
+  settled: [],
+  openThreads: Count.make(0),
+  relations: [],
+  checks: "passed",
+  claimed: false,
+  review: null,
+  queue: null,
+  attention: null,
+  delivered: null
+}
 
 const at = (time: string) => IsoTime.make(time)
+
+const needs = (why: string, time: string): Attention => ({ why: Text.make(why), at: IsoTime.make(time) })
 
 export const sessionAuth = SessionName.make("auth")
 export const sessionUi = SessionName.make("ui-kit")
@@ -103,7 +124,8 @@ export const architectureCard: Card = {
     side: "reviewer",
     text: Text.make("All four threads settled; refresh lifetime is the open design question"),
     at: at("2026-11-05T15:20:00Z")
-  }
+  },
+  attention: needs("The agent's review is done: an architecture call for you", "2026-11-05T15:30:00Z")
 }
 
 export const lookCard: Card = {
@@ -118,7 +140,8 @@ export const lookCard: Card = {
   ],
   openThreads: Count.make(1),
   relations: [{ kind: "conflicts-with", with: PrKey.make("github:acme/api#212"), label: Text.make("acme/api#212") }],
-  updatedAt: at("2026-11-05T14:02:00Z")
+  updatedAt: at("2026-11-05T14:02:00Z"),
+  attention: needs("The agent's review is done: worth a look", "2026-11-05T15:20:00Z")
 }
 
 export const skimCard: Card = {
@@ -129,7 +152,8 @@ export const skimCard: Card = {
   stage: "ready",
   triage: { verdict: "skim", reason: Text.make("Mechanical rename, tests unchanged") },
   settled: [{ thread: Text.make("src/routes.ts"), outcome: "fixed", note: Text.make("One constant was missed") }],
-  updatedAt: at("2026-11-05T13:45:00Z")
+  updatedAt: at("2026-11-05T13:45:00Z"),
+  attention: needs("The agent's review is done: a skim", "2026-11-05T15:15:00Z")
 }
 
 export const reviewingCard: Card = {
@@ -215,7 +239,8 @@ export const waitingCard: Card = {
   role: "author",
   stage: "waiting",
   checks: "failed",
-  updatedAt: at("2026-11-05T12:00:00Z")
+  updatedAt: at("2026-11-05T12:00:00Z"),
+  attention: needs("CI failed and no agent is on it", "2026-11-05T12:00:00Z")
 }
 
 export const requestedCard: Card = {
@@ -268,6 +293,75 @@ export const mergedCard: Card = {
   updatedAt: at("2026-11-04T12:00:00Z")
 }
 
+export const mergeReadyCard: Card = {
+  ...base("you/ui-kit", 47, "Focus ring on the menu items"),
+  ...quiet,
+  author: desk,
+  role: "author",
+  stage: "reviewed",
+  review: "approved",
+  agent: { session: SessionName.make("ui-kit"), working: false },
+  claimed: true,
+  delivered: { text: Text.make("Sent the CI failure"), at: at("2026-11-05T13:10:00Z") },
+  attention: needs("Approved with CI passed: ready to merge", "2026-11-05T14:05:00Z"),
+  updatedAt: at("2026-11-05T14:05:00Z")
+}
+
+export const queuedCard: Card = {
+  ...base("acme/web", 91, "Cache the plan lookups"),
+  ...quiet,
+  author: desk,
+  role: "author",
+  stage: "reviewed",
+  review: "approved",
+  queue: { state: Text.make("queued"), position: Count.make(2) },
+  updatedAt: at("2026-11-05T14:30:00Z")
+}
+
+export const issueMention: Mention = {
+  key: prKey("github", repo("acme/api"), PrNumber.make(310)),
+  kind: "issue",
+  forge: "github",
+  repo: repo("acme/api"),
+  number: PrNumber.make(310),
+  title: Text.make("Webhook retries pile up after a deploy"),
+  url: Url.make("https://github.com/acme/api/issues/310"),
+  by: sam,
+  text: Text.make("@dana do you know whether the retry queue drains on deploy?"),
+  at: at("2026-11-05T15:05:00Z"),
+  attention: needs("sam mentioned you", "2026-11-05T15:05:00Z")
+}
+
+export const pullMention: Mention = {
+  key: prKey("github", repo("acme/web"), PrNumber.make(77)),
+  kind: "pull",
+  forge: "github",
+  repo: repo("acme/web"),
+  number: PrNumber.make(77),
+  title: Text.make("Move the footer links into the nav"),
+  url: Url.make("https://github.com/acme/web/pull/77"),
+  by: lee,
+  text: Text.make("cc @dana for the copy"),
+  at: at("2026-11-05T08:00:00Z"),
+  attention: null
+}
+
+export const liveHealth: Health = { state: "live", reason: null, lastGood: at("2026-11-05T15:42:00Z"), until: null }
+
+export const pausedHealth: Health = {
+  state: "paused",
+  reason: Text.make("GitHub's rate limit for this account is spent"),
+  lastGood: at("2026-11-05T19:45:00Z"),
+  until: at("2026-11-05T20:12:00Z")
+}
+
+export const routingOn: Routing = { on: true, reason: null }
+
+export const routingOff: Routing = {
+  on: false,
+  reason: Text.make("No areas configured, so review requests stay with you")
+}
+
 export const busyBoard: Board = {
   desk,
   cards: [
@@ -282,11 +376,34 @@ export const busyBoard: Board = {
     untrustedCard,
     awaitingThemCard,
     reviewedCard,
-    mergedCard
+    mergedCard,
+    mergeReadyCard,
+    queuedCard
   ],
   ready: [architectureCard.key, lookCard.key, skimCard.key],
   sidediff: true,
-  polledAt: at("2026-11-05T15:42:00Z")
+  polledAt: at("2026-11-05T15:42:00Z"),
+  mentions: [issueMention, pullMention],
+  health: liveHealth,
+  routing: routingOn,
+  budget: { remaining: Count.make(4210), limit: Count.make(5000), resetAt: at("2026-11-05T16:00:00Z"), slowed: false }
 }
 
-export const quietBoard: Board = { desk, cards: [], ready: [], sidediff: false, polledAt: at("2026-11-05T15:42:00Z") }
+export const quietBoard: Board = {
+  desk,
+  cards: [],
+  ready: [],
+  sidediff: false,
+  polledAt: at("2026-11-05T15:42:00Z"),
+  mentions: [],
+  health: liveHealth,
+  routing: routingOn,
+  budget: null
+}
+
+export const troubledBoard: Board = {
+  ...busyBoard,
+  health: pausedHealth,
+  routing: routingOff,
+  budget: { remaining: Count.make(0), limit: Count.make(5000), resetAt: at("2026-11-05T20:12:00Z"), slowed: true }
+}

@@ -248,20 +248,30 @@ const sketchybar = Command.make(
   {},
   Effect.fn(function* () {
     const shell = yield* Shell
-    const trigger = (summary: { readonly ready: number; readonly working: number; readonly talking: number }) =>
+    const trigger = (summary: Summary) =>
       shell
         .run("sketchybar", [
           "--trigger",
           "review_desk_update",
-          `READY=${summary.ready}`,
-          `WORKING=${summary.working}`,
-          `TALKING=${summary.talking}`
+          `READY=${summary.needsYou}`,
+          `WORKING=${summary.agents.working}`,
+          `TALKING=${summary.agents.talking}`,
+          `HEALTH=${summary.health.state}`
         ])
         .pipe(Effect.ignore)
     yield* shell.run("sketchybar", ["--add", "event", "review_desk_update"]).pipe(Effect.ignore)
     yield* withDesk((client) => client.WatchSummary().pipe(Stream.runForEach(trigger)))
   }, Effect.provide(Shell.layer))
 ).pipe(Command.withDescription("Keep SketchyBar's review_desk_update event fed with the counts"))
+
+const seen = Command.make(
+  "seen",
+  { key },
+  Effect.fn(function* (input) {
+    yield* withDesk((client) => client.MarkSeen({ key: input.key }))
+    yield* Console.log(`marked ${input.key} seen; it leaves Needs you until something new happens on it`)
+  })
+).pipe(Command.withDescription("Clear a pull request or issue from Needs you without replying"))
 
 const SummaryJson = Schema.fromJsonString(Summary)
 
@@ -276,7 +286,7 @@ const summary = Command.make("summary", {}, () =>
 
 const cli = Command.make("review-desk").pipe(
   Command.withDescription("Agents do the first review rounds; you get a queue of what needs a person"),
-  Command.withSubcommands([serve, comment, triage, claim, sketchybar, summary])
+  Command.withSubcommands([serve, comment, triage, claim, seen, sketchybar, summary])
 )
 
 const messageOf = (cause: Cause.Cause<unknown>): string =>
@@ -286,7 +296,7 @@ const messageOf = (cause: Cause.Cause<unknown>): string =>
   })
 
 cli.pipe(
-  Command.run({ version: "0.1.2" }),
+  Command.run({ version: "0.2.0" }),
   Effect.tapCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Console.error(messageOf(cause)))),
   Effect.provide(BunServices.layer),
   BunRuntime.runMain

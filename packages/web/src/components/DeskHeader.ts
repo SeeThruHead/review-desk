@@ -3,9 +3,10 @@ import { ui } from "../theme/ui.ts"
 
 export type DeskHeaderProps = {
   readonly desk: string
-  readonly ready: number
+  readonly needs: number
   readonly working: number
   readonly polled: string
+  readonly budget: string | null
 }
 
 const agentsText = (count: number): string => (count === 1 ? "1 agent working" : `${count} agents working`)
@@ -31,12 +32,18 @@ export const DeskHeader = <M>(h: HtmlBuilder<M>, props: DeskHeaderProps): Html =
             children: [
               ui.Badge(h, {
                 size: "lg",
-                color: props.ready > 0 ? "red" : "gray",
+                color: props.needs > 0 ? "red" : "gray",
                 variant: "filled",
-                children: [`${props.ready} ready for you`]
+                children: [`${props.needs} need you`]
               }),
               ui.Badge(h, { size: "lg", color: "green", variant: "light", children: [agentsText(props.working)] }),
-              ui.Text(h, { size: "xs", c: "dimmed", children: [props.polled] })
+              ui.Stack(h, {
+                gap: 0,
+                children: [
+                  ui.Text(h, { size: "xs", c: "dimmed", children: [props.polled] }),
+                  ...(props.budget === null ? [] : [ui.Text(h, { size: "xs", c: "dimmed", children: [props.budget] })])
+                ]
+              })
             ]
           })
         ]

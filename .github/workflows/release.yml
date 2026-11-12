@@ -20,6 +20,9 @@ jobs:
       - name: Build the server with the page inside
         working-directory: packages/server
         run: bun tools/compile.ts bun-darwin-arm64 dist/review-desk
+      - name: Test the menu bar tray
+        working-directory: tray
+        run: cargo test -- --test-threads=1
       - name: Build the menu bar tray
         working-directory: tray
         run: cargo build --release

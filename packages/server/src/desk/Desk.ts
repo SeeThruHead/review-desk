@@ -99,7 +99,7 @@ const placeOf = (target: AgentTarget): string =>
 const sameSummary = Schema.toEquivalence(Summary)
 
 const failureOf = (error: ForgeError): Failure => ({
-  message: error.message,
+  message: error.paused === true ? error.reason : error.message,
   paused: error.paused === true,
   until: error.until ?? null
 })

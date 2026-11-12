@@ -11,7 +11,7 @@ export const healthAfter = (failures: ReadonlyArray<Failure>, before: Health, no
   if (paused !== undefined)
     return {
       state: "paused",
-      reason: Text.make("GitHub's rate limit for this account is spent"),
+      reason: Text.make(paused.message),
       lastGood: before.lastGood,
       until: paused.until === null ? null : IsoTime.make(paused.until)
     }

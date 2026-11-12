@@ -28,7 +28,11 @@ export const DeskSettings = Schema.Struct({
   pollSeconds: Schema.Int,
   port: Schema.Int,
   sidediff: Schema.NullOr(Schema.Struct({ checkouts: Schema.Record(Schema.String, Schema.String) })),
-  github: Schema.Struct({ api: Schema.String, tokenCommand: Schema.Array(Schema.String) }),
+  github: Schema.Struct({
+    api: Schema.String,
+    tokenCommand: Schema.Array(Schema.String),
+    login: Schema.optionalKey(Schema.String)
+  }),
   gitea: Schema.NullOr(
     Schema.Struct({ url: Schema.String, tokenFile: Schema.String, discoverOwned: Schema.optionalKey(Schema.Boolean) })
   ),

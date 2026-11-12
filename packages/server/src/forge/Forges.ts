@@ -21,7 +21,13 @@ export const ForgesLive = Layer.effect(
             .run(command, args)
             .pipe(
               Effect.flatMap((token) =>
-                gitHubClient(config.github.api, token.trim(), config.intakeLabel, config.pollSeconds)
+                gitHubClient(
+                  config.github.api,
+                  token.trim(),
+                  config.intakeLabel,
+                  config.pollSeconds,
+                  config.github.login ?? "@me"
+                )
               )
             )
         : null

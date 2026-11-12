@@ -1,23 +1,25 @@
 import type { Budget, Checks, ReviewDecision } from "@review-desk/contract/Board.ts"
 import { Count, IsoTime, Login, PrNumber, type RepoSlug, Text, Url, prKey } from "@review-desk/contract/Ids.ts"
 import { Branch, ForgeId, type IssueFacts, type PullFacts } from "@review-desk/domain/Facts.ts"
-import { DateTime, Duration, Effect, Option, Ref, Schema } from "effect"
+import { DateTime, Duration, Effect, Option, Ref, Schema, Semaphore } from "effect"
 import { Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { type ForgeClient, ForgeError, type Post } from "./Forge.ts"
 import {
+  type Answer,
   type Brief,
   type Cached,
-  type GraphqlFailure,
   type RateLimit,
+  type Reading,
   changedIds,
   chunksOf,
-  graphqlFailure,
   listDue,
-  outOfBudget,
   paceOf,
-  resetAt,
+  readDue,
+  refusalOf,
+  resumeAt,
   stampOf,
-  uniqueById
+  uniqueById,
+  verdictOf
 } from "./GitHubPoll.ts"
 import { searchesFor } from "./GitHubSearch.ts"
 
@@ -306,13 +308,8 @@ const failed = (error: { readonly message: string }) => new ForgeError({ forge: 
 
 const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis))
 
-const pausedError = (until: number) =>
-  new ForgeError({
-    forge: "github",
-    reason: `rate limit reached; paused until ${isoOf(until)}`,
-    paused: true,
-    until: isoOf(until)
-  })
+const pausedError = (reason: string, until: number) =>
+  new ForgeError({ forge: "github", reason, paused: true, until: isoOf(until) })
 
 const isIssueBrief = (node: object): node is typeof IssueBriefNode.Type => "id" in node
 
@@ -331,7 +328,17 @@ const budgetOf = (rate: RateLimit | null): Budget | null =>
 const currentRate = (rate: RateLimit | null, nowMillis: number): RateLimit | null =>
   rate !== null && millisOf(rate.resetAt) > nowMillis ? rate : null
 
-const Envelope = Schema.Struct({ data: Schema.Unknown })
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
+
+const bodyOf = (text: string): unknown => Option.getOrElse(decodeJson(text), () => text)
+
+const answerOf = (response: HttpClientResponse.HttpClientResponse, text: string): Answer => ({
+  status: response.status,
+  remaining: Headers.get(response.headers, "x-ratelimit-remaining"),
+  retryAfter: Headers.get(response.headers, "retry-after"),
+  reset: Headers.get(response.headers, "x-ratelimit-reset"),
+  body: bodyOf(text)
+})
 
 const requestFor = (pull: PullFacts, post: Post) => {
   if (post.replyTo !== null)
@@ -354,11 +361,28 @@ const requestFor = (pull: PullFacts, post: Post) => {
   )
 }
 
+type Probe = { readonly etag: string; readonly generation: number; readonly at: number }
+
+const changeProbe = (repo: RepoSlug, known: Probe | undefined) =>
+  HttpClientRequest.get(`/repos/${repo}/issues`).pipe(
+    HttpClientRequest.setUrlParams({ state: "all", sort: "updated", direction: "desc", per_page: "5" }),
+    HttpClientRequest.setHeaders(known === undefined || known.etag === "" ? {} : { "if-none-match": known.etag })
+  )
+
+const safetyMillis = 15 * 60 * 1000
+
+const gap = Duration.seconds(1)
+
+type Kept<A> = { readonly reading: Reading; readonly facts: ReadonlyArray<A> }
+
+const isPending = (pull: PullFacts): boolean => pull.state === "open" && pull.checks === "pending"
+
 export const gitHubClient = Effect.fnUntraced(function* (
   api: string,
   token: string,
   intakeLabel: string,
-  pollSeconds: number
+  pollSeconds: number,
+  login: string
 ) {
   const raw = (yield* HttpClient.HttpClient).pipe(
     HttpClient.mapRequest((request) =>
@@ -371,65 +395,95 @@ export const gitHubClient = Effect.fnUntraced(function* (
     )
   )
   const http = raw.pipe(HttpClient.filterStatusOk)
+  const gate = yield* Semaphore.make(1)
   const pausedUntil = yield* Ref.make(0)
+  const pauseReason = yield* Ref.make("")
+  const strikes = yield* Ref.make(0)
   const cache = yield* Ref.make<ReadonlyMap<string, Cached<PullNode>>>(new Map())
   const issueCache = yield* Ref.make<ReadonlyMap<string, Cached<typeof IssueNode.Type>>>(new Map())
   const mentionBriefs = yield* Ref.make<ReadonlyMap<string, ReadonlyArray<Brief>>>(new Map())
-  const listed = yield* Ref.make<
-    ReadonlyMap<string, { readonly at: number; readonly facts: ReadonlyArray<PullFacts> }>
-  >(new Map())
+  const listed = yield* Ref.make<ReadonlyMap<string, Kept<PullFacts>>>(new Map())
+  const issuesRead = yield* Ref.make<ReadonlyMap<string, Kept<IssueFacts>>>(new Map())
+  const probes = yield* Ref.make<ReadonlyMap<string, Probe>>(new Map())
   const rate = yield* Ref.make<RateLimit | null>(null)
 
-  const pause = Effect.fnUntraced(function* (response: HttpClientResponse.HttpClientResponse, message: string) {
-    const now = yield* DateTime.now
-    const until = resetAt(Headers.get(response.headers, "x-ratelimit-reset"), DateTime.toEpochMillis(now))
-    yield* Ref.set(pausedUntil, until)
+  const nowMillis = Effect.map(DateTime.now, DateTime.toEpochMillis)
+
+  const backOff = Effect.fnUntraced(function* (reason: string, until: number | null) {
+    const now = yield* nowMillis
+    const count = yield* Ref.updateAndGet(strikes, (before) => before + 1)
+    const resume = resumeAt(until, count, now)
+    yield* Ref.set(pausedUntil, resume)
+    yield* Ref.set(pauseReason, reason)
     yield* Effect.logWarning(
-      `GitHub's rate limit for this account is spent (${message}); every desk and gh on the account share it. No GitHub calls until ${isoOf(until)}.`
+      `${reason} (refusal ${count} in a row); every desk and gh on the account share its limits. No GitHub calls until ${isoOf(resume)}.`
     )
 
-    return yield* pausedError(until)
+    return yield* pausedError(reason, resume)
   })
 
   const notPaused = Effect.gen(function* () {
     const until = yield* Ref.get(pausedUntil)
-    const now = yield* DateTime.now
-    if (DateTime.toEpochMillis(now) >= until) return
+    const now = yield* nowMillis
+    if (now >= until) return
+    const reason = yield* Ref.get(pauseReason)
 
-    return yield* pausedError(until)
+    return yield* pausedError(reason, until)
   })
 
-  const reject = (response: HttpClientResponse.HttpClientResponse, failure: GraphqlFailure) =>
-    failure.rateLimited ? pause(response, failure.message) : Effect.fail(failed(failure))
+  const serially = <A, E>(call: Effect.Effect<A, E>) => gate.withPermits(1)(Effect.andThen(notPaused, call))
 
-  const graphql = Effect.fnUntraced(function* <S extends Schema.Top>(body: object, data: S) {
-    yield* notPaused
-    const response = yield* HttpClientRequest.post("/graphql").pipe(
-      HttpClientRequest.bodyJsonUnsafe(body),
+  const exchange = (request: HttpClientRequest.HttpClientRequest) =>
+    request.pipe(
       raw.execute,
+      Effect.flatMap((response) => Effect.map(response.text, (text) => ({ response, text }))),
       Effect.timeout(Duration.seconds(30)),
       Effect.mapError(failed)
     )
-    const remaining = Headers.get(response.headers, "x-ratelimit-remaining")
-    if (outOfBudget(response.status, remaining)) return yield* pause(response, `HTTP ${response.status}`)
-    if (response.status >= 300) return yield* failed({ message: `HTTP ${response.status}` })
-    const json = yield* response.json.pipe(Effect.timeout(Duration.seconds(30)), Effect.mapError(failed))
-    const failure = graphqlFailure(json)
-    if (Option.isSome(failure)) return yield* reject(response, failure.value)
-    const envelope = yield* Schema.decodeUnknownEffect(Envelope)(json).pipe(Effect.mapError(failed))
 
-    return yield* Schema.decodeUnknownEffect(data)(envelope.data).pipe(Effect.mapError(failed))
+  const graphql = Effect.fnUntraced(function* <S extends Schema.Top>(body: object, data: S) {
+    const { response, text } = yield* serially(
+      exchange(HttpClientRequest.post("/graphql").pipe(HttpClientRequest.bodyJsonUnsafe(body))).pipe(
+        Effect.tap(() => Effect.sleep(gap))
+      )
+    )
+    const now = yield* nowMillis
+    const verdict = verdictOf(answerOf(response, text), now)
+    if (verdict._tag === "Throttled") return yield* backOff(verdict.reason, verdict.until)
+    if (verdict._tag === "Failed") return yield* failed({ message: verdict.reason })
+    yield* Ref.set(strikes, 0)
+
+    return yield* Schema.decodeUnknownEffect(data)(verdict.data).pipe(Effect.mapError(failed))
+  })
+
+  const generationOf = Effect.fnUntraced(function* (repo: RepoSlug) {
+    const now = yield* nowMillis
+    const known = (yield* Ref.get(probes)).get(repo)
+    if (known !== undefined && now - known.at < pollSeconds * 500) return known.generation
+    const { response, text } = yield* serially(exchange(changeProbe(repo, known)))
+    const refusal = refusalOf(answerOf(response, text), now)
+    if (refusal !== null) return yield* backOff(refusal.reason, refusal.until)
+    const unchanged = response.status === 304
+    const previous = known?.generation ?? 0
+    const generation = unchanged ? previous : previous + 1
+    const fresh = response.status < 300 ? Option.getOrElse(Headers.get(response.headers, "etag"), () => "") : ""
+    const etag = unchanged ? (known?.etag ?? "") : fresh
+    yield* Ref.update(probes, (before) => new Map([...before, [repo, { etag, generation, at: now }]]))
+
+    return generation
   })
 
   const stopUntilReset = Effect.gen(function* () {
     const current = yield* Ref.get(rate)
     const until = current === null ? 0 : millisOf(current.resetAt)
+    const reason = "GitHub's rate limit for this account is nearly spent"
     yield* Ref.set(pausedUntil, until)
+    yield* Ref.set(pauseReason, reason)
     yield* Effect.logWarning(
-      `GitHub's rate limit for this account is nearly spent; every desk and gh on the account share it. No GitHub calls until ${isoOf(until)}.`
+      `${reason}; every desk and gh on the account share it. No GitHub calls until ${isoOf(until)}.`
     )
 
-    return yield* pausedError(until)
+    return yield* pausedError(reason, until)
   })
 
   const detailsOf = (ids: ReadonlyArray<string>) =>
@@ -447,7 +501,7 @@ export const gitHubClient = Effect.fnUntraced(function* (
     )
 
   const list = Effect.fn("GitHub.list")(function* (repo: RepoSlug) {
-    const found = yield* graphql({ query: LIST_QUERY, variables: searchesFor(repo, intakeLabel) }, ListData)
+    const found = yield* graphql({ query: LIST_QUERY, variables: searchesFor(repo, intakeLabel, login) }, ListData)
     yield* Ref.set(rate, found.rateLimit)
     yield* Ref.update(
       mentionBriefs,
@@ -482,16 +536,17 @@ export const gitHubClient = Effect.fnUntraced(function* (
   const pulls = Effect.fn("GitHub.pulls")(function* (repo: RepoSlug) {
     yield* Effect.annotateCurrentSpan("repo", repo)
     yield* notPaused
-    const clock = yield* DateTime.now
-    const now = DateTime.toEpochMillis(clock)
+    const now = yield* nowMillis
     const reading = yield* Ref.get(rate)
     const pace = paceOf(currentRate(reading, now))
     if (pace === "stop") return yield* stopUntilReset
-    const lists = yield* Ref.get(listed)
-    const last = lists.get(repo)
-    if (last !== undefined && !listDue(pace, last.at, now, pollSeconds * 1000)) return last.facts
+    const last = (yield* Ref.get(listed)).get(repo)
+    if (last !== undefined && !listDue(pace, last.reading.at, now, pollSeconds * 1000)) return last.facts
+    const generation = yield* generationOf(repo)
+    if (!readDue({ generation, last: last?.reading, nowMillis: now, safetyMillis })) return last?.facts ?? []
     const facts = yield* list(repo)
-    yield* Ref.update(listed, (before) => new Map([...before, [repo, { at: now, facts }]]))
+    const kept = { reading: { generation, at: now, pending: facts.some(isPending) }, facts }
+    yield* Ref.update(listed, (before) => new Map([...before, [repo, kept]]))
 
     return facts
   })
@@ -520,10 +575,10 @@ export const gitHubClient = Effect.fnUntraced(function* (
   })
 
   const budget = Effect.gen(function* () {
-    const clock = yield* DateTime.now
+    const now = yield* nowMillis
     const reading = yield* Ref.get(rate)
 
-    return budgetOf(currentRate(reading, DateTime.toEpochMillis(clock)))
+    return budgetOf(currentRate(reading, now))
   })
 
   const post = Effect.fn("GitHub.post")(function* (pull: PullFacts, input: Post) {
@@ -548,10 +603,17 @@ export const gitHubClient = Effect.fnUntraced(function* (
 
   const issues = Effect.fn("GitHub.issues")(function* (repo: RepoSlug) {
     yield* Effect.annotateCurrentSpan("repo", repo)
+    const now = yield* nowMillis
+    const last = (yield* Ref.get(issuesRead)).get(repo)
+    const generation = yield* generationOf(repo)
+    if (!readDue({ generation, last: last?.reading, nowMillis: now, safetyMillis })) return last?.facts ?? []
     const [owner, name] = repo.split("/")
     const found = yield* graphql({ query: ISSUES_QUERY, variables: { owner, name } }, IssuesData)
+    const facts = (found.repository?.issues.nodes ?? []).map(issueOf(repo))
+    const kept = { reading: { generation, at: now, pending: false }, facts }
+    yield* Ref.update(issuesRead, (before) => new Map([...before, [repo, kept]]))
 
-    return (found.repository?.issues.nodes ?? []).map(issueOf(repo))
+    return facts
   })
 
   const commentOnIssue = Effect.fn("GitHub.commentOnIssue")(function* (repo: RepoSlug, number: number, body: string) {

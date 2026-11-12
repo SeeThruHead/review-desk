@@ -20,7 +20,7 @@ describe("whether the board's data is current", () => {
 
     expect(healthAfter(failures, earlier, now)).toEqual({
       state: "paused",
-      reason: "GitHub's rate limit for this account is spent",
+      reason: "rate limit",
       lastGood: earlier.lastGood,
       until: "2026-11-05T20:12:00Z"
     })

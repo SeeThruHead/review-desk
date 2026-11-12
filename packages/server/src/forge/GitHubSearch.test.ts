@@ -14,6 +14,12 @@ describe("which GitHub pull requests the desk reads", () => {
     })
   })
 
+  it("searches for a named login instead of @me when the desk reads with its own credential", () => {
+    expect(searchesFor(RepoSlug.make("acme/api"), "agent-review", "dana").requested).toBe(
+      "repo:acme/api is:pr is:open review-requested:dana"
+    )
+  })
+
   it("looks for issues that mention the owner only inside the configured repository", () => {
     expect(searchesFor(RepoSlug.make("acme/api"), "agent-review").mentioned).toMatch(/^repo:acme\/api /)
   })

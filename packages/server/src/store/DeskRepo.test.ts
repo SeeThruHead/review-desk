@@ -33,6 +33,18 @@ describe("the desk's own records", () => {
       })
     )
 
+    it.effect("drops a pull request's claim and its role when the claim is released", () =>
+      Effect.gen(function* () {
+        const repo = yield* DeskRepo
+        const other = PrKey.make("github:acme/api#5")
+        yield* repo.claim(other, SessionName.make("gone"), "author")
+        yield* repo.releasePull(other)
+        const records = yield* repo.records
+
+        expect([records.claims.has(other), records.claimRoles.has(other)]).toEqual([false, false])
+      })
+    )
+
     it.effect("keeps when each pull request was last marked seen and what the desk last delivered on it", () =>
       Effect.gen(function* () {
         const repo = yield* DeskRepo

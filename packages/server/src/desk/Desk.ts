@@ -16,7 +16,7 @@ import {
   type Forge,
   IsoTime,
   Login,
-  type PrKey,
+  PrKey,
   type RepoSlug,
   type SessionName,
   Text,
@@ -43,13 +43,14 @@ import {
   Stream,
   SubscriptionRef
 } from "effect"
-import { Agents, type LiveAgent } from "../agents/Agents.ts"
+import { Agents, type LiveAgent, type Roster } from "../agents/Agents.ts"
 import { type AgentTarget, targetFor } from "../agents/Remote.ts"
 import { DeskConfig } from "../config/DeskConfig.ts"
 import { type BranchRuns, type ForgeError, Forges } from "../forge/Forge.ts"
 import { Shell } from "../platform/Shell.ts"
 import { DeskRepo } from "../store/DeskRepo.ts"
 import { type Reported, type Watched, branchMessage, watchedBranches } from "./BranchWatch.ts"
+import { type Holder, absences } from "./Gone.ts"
 import { claimId, issuePlan } from "./IssueWatch.ts"
 import { type RepoRef, withDiscovered } from "./Repos.ts"
 import { type Failure, crashed, healthAfter, overdue, starting } from "./Health.ts"
@@ -220,6 +221,53 @@ export class Desk extends Context.Service<
 
       const now = Effect.map(DateTime.now, (time) => IsoTime.make(DateTime.formatIso(time)))
 
+      const claimGraceMinutes = config.claimGraceMinutes ?? 30
+
+      const noRoster: Roster = { agents: [], reached: [], complete: false }
+
+      const roster = agents.roster.pipe(
+        Effect.tapError((error) => Effect.logWarning(error.message)),
+        Effect.orElseSucceed(() => noRoster)
+      )
+
+      const missingRef = yield* Ref.make<ReadonlyMap<string, number>>(new Map())
+
+      const release = (holder: Holder) => {
+        const who = holder._tag === "Session" ? holder.session : `${holder.pane} on ${holder.machine ?? "this machine"}`
+        const done =
+          holder._tag === "Session" ? repo.releasePull(PrKey.make(holder.key)) : repo.releaseIssues(holder.key)
+
+        return done.pipe(
+          Effect.andThen(
+            Effect.logInfo(
+              `released the claim ${holder.key}: its agent ${who} was gone for the whole grace period (${claimGraceMinutes} min)`
+            )
+          )
+        )
+      }
+
+      const releaseGone = Effect.fn("Desk.releaseGone")(
+        function* (found: Roster) {
+          const records = yield* repo.records
+          const watchers = yield* repo.issueClaims
+          const holders: ReadonlyArray<Holder> = [
+            ...[...records.claims].map(([key, session]): Holder => ({ _tag: "Session", key, session })),
+            ...watchers.map((watcher): Holder => ({
+              _tag: "Pane",
+              key: watcher.id,
+              machine: watcher.target.machine,
+              pane: watcher.target.pane
+            }))
+          ]
+          const clock = yield* DateTime.now
+          const before = yield* Ref.get(missingRef)
+          const judged = absences(holders, found, before, DateTime.toEpochMillis(clock), claimGraceMinutes * 60_000)
+          yield* Ref.set(missingRef, judged.missing)
+          yield* Effect.forEach(judged.expired, release, { discard: true })
+        },
+        Effect.catch((error) => Effect.logWarning(error.message))
+      )
+
       const execute = Effect.fn("Desk.execute")(function* (steps: ReturnType<typeof plan>) {
         yield* Effect.forEach(
           steps.routes,
@@ -387,7 +435,8 @@ export class Desk extends Context.Service<
           Effect.gen(function* () {
             yield* discover
             const settings = { ...config, repos: yield* Ref.get(reposRef) }
-            const [pulls, live] = yield* Effect.all([fetchAll(fetchRepo), liveAgents], { concurrency: 2 })
+            const [pulls, found] = yield* Effect.all([fetchAll(fetchRepo), roster], { concurrency: 2 })
+            const live = found.agents
             const mentioned = yield* fetchAll(fetchMentions)
             yield* Ref.set(factsRef, pulls.found)
             yield* Ref.set(issuesRef, mentioned.found)
@@ -396,6 +445,7 @@ export class Desk extends Context.Service<
             yield* execute(plan({ settings, facts: pulls.found, records: before, agents: live }))
             yield* watchBranches(settings, pulls.found, live)
             yield* watchIssues
+            yield* releaseGone(found)
             yield* publish(settings, live, [...pulls.failures, ...mentioned.failures])
           })
         )

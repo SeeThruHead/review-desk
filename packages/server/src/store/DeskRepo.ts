@@ -63,6 +63,7 @@ export class DeskRepo extends Context.Service<
   {
     readonly records: Effect.Effect<Records, DeskRepoError>
     readonly claim: (pull: PrKey, session: SessionName, role: Role) => Effect.Effect<void, DeskRepoError>
+    readonly releasePull: (pull: PrKey) => Effect.Effect<void, DeskRepoError>
     readonly saveTriage: (
       pull: PrKey,
       triage: Triage,
@@ -129,6 +130,11 @@ export class DeskRepo extends Context.Service<
           ON CONFLICT (pull) DO UPDATE SET session = excluded.session, claimed_at = excluded.claimed_at`
         yield* sql`INSERT INTO claim_roles (pull, role) VALUES (${pull}, ${role})
           ON CONFLICT (pull) DO UPDATE SET role = excluded.role`
+      }, failed)
+
+      const releasePull = Effect.fn("DeskRepo.releasePull")(function* (pull: PrKey) {
+        yield* sql`DELETE FROM claims WHERE pull = ${pull}`
+        yield* sql`DELETE FROM claim_roles WHERE pull = ${pull}`
       }, failed)
 
       const saveTriage = Effect.fn("DeskRepo.saveTriage")(function* (
@@ -237,6 +243,7 @@ export class DeskRepo extends Context.Service<
       return DeskRepo.of({
         records,
         claim,
+        releasePull,
         saveTriage,
         remember,
         branches,

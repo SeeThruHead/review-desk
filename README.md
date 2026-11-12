@@ -39,7 +39,7 @@ cd packages/server && bun run desk serve
 
 Open http://127.0.0.1:4790. For the menu bar, build the tray (`cd tray && cargo build --release`) and run it with `REVIEW_DESK_SERVER` set to a compiled `review-desk` (`cd packages/server && bun run compile`); it starts and restarts the server itself.
 
-Agents use the same binary: `review-desk comment`, `review-desk triage` and `review-desk claim`. The brief the desk sends them explains how.
+Agents use the same binary: `review-desk comment`, `review-desk triage` and `review-desk claim`. The brief the desk sends them explains how. A claim whose agent has been gone for `claimGraceMinutes` (default 30) is released by the desk, so a closed pane never holds work.
 
 ## SketchyBar
 

@@ -3,6 +3,7 @@ import { Config, Context, Effect, FileSystem, Layer, Option, Path, Schema } from
 import { createConnection } from "node:net"
 import { DeskConfig } from "../config/DeskConfig.ts"
 import { type CommandFailed, Shell } from "../platform/Shell.ts"
+import { type Roster as Sightings, placeOf } from "../desk/Gone.ts"
 import { type Step, deliveryFor } from "./Delivery.ts"
 import { type AgentTarget, type Location, locateScript, parseLocations } from "./Remote.ts"
 import {
@@ -93,7 +94,7 @@ const quiet =
   <E extends { readonly message: string }>(found: Effect.Effect<ReadonlyArray<Found>, E>) =>
     found.pipe(
       Effect.tapError((error) => Effect.logDebug(`${host} did not answer: ${error.message}`)),
-      Effect.orElseSucceed((): ReadonlyArray<Found> => [])
+      Effect.option
     )
 
 const failed = (target: AgentTarget) => (error: { readonly message: string }) =>
@@ -110,10 +111,15 @@ const postToSocket = (socketPath: string, text: string) =>
     return Effect.sync(() => connection.destroy())
   }).pipe(Effect.timeout(sendTimeout))
 
+type Heard = { readonly place: string; readonly agents: ReadonlyArray<LiveAgent> | null }
+
+export type Roster = Omit<Sightings, "agents"> & { readonly agents: ReadonlyArray<LiveAgent> }
+
 export class Agents extends Context.Service<
   Agents,
   {
     readonly list: Effect.Effect<ReadonlyArray<LiveAgent>, AgentsUnavailable>
+    readonly roster: Effect.Effect<Roster, AgentsUnavailable>
     readonly prompt: (target: AgentTarget, text: string) => Effect.Effect<void, PromptFailed>
   }
 >()("review-desk/server/Agents") {
@@ -138,7 +144,7 @@ export class Agents extends Context.Service<
         decodeJson(AgentList),
         Effect.map(({ result }) => result.agents.map(herdrFound)),
         Effect.tapError((error) => Effect.logDebug(`herdr did not answer: ${error.message}`)),
-        Effect.orElseSucceed((): ReadonlyArray<Named> => [])
+        Effect.option
       )
 
       const app = shell.run("hc", ["ls", "--json"]).pipe(
@@ -204,10 +210,20 @@ export class Agents extends Context.Service<
           [herdrHere, app, cmux, orca, tmux, claudeSessions],
           { concurrency: 6 }
         )
-        const terminals: ReadonlyArray<Named> = [...herdr, ...[...inApp, ...inCmux, ...inOrca, ...inTmux].map(named)]
+        const others = [inApp, inCmux, inOrca, inTmux].flatMap((found) => Option.getOrElse(found, () => []))
+        const terminals: ReadonlyArray<Named> = [...Option.getOrElse(herdr, () => []), ...others.map(named)]
         const all = [...terminals, ...claudeAgents(sessions, terminals).map(named)]
+        const heard = [
+          ["herdr", herdr],
+          ["hc", inApp],
+          ["cmux", inCmux],
+          ["orca", inOrca],
+          ["tmux", inTmux]
+        ] as const
+        const reached = heard.flatMap(([host, found]) => (Option.isSome(found) ? [placeOf(null, host)] : []))
+        const agents = yield* Effect.forEach(all, locateHere, { concurrency: 4 })
 
-        return yield* Effect.forEach(all, locateHere, { concurrency: 4 })
+        return { agents, reached: [...reached, placeOf(null, "claude")] }
       })
 
       const nowhere: Location = { branch: Option.none(), remote: Option.none() }
@@ -228,7 +244,8 @@ export class Agents extends Context.Service<
         (machine) =>
           there(machine).pipe(
             Effect.tapError((error) => Effect.logWarning(`agents on ${machine.label}: ${error.message}`)),
-            Effect.orElseSucceed((): ReadonlyArray<LiveAgent> => [])
+            Effect.map((agents): Heard => ({ place: placeOf(machine.label, "herdr"), agents })),
+            Effect.orElseSucceed((): Heard => ({ place: placeOf(machine.label, "herdr"), agents: null }))
           ),
         { concurrency: 2 }
       )
@@ -249,27 +266,35 @@ export class Agents extends Context.Service<
         return found.map((agent) => shape(named(agent), machine, where.get(agent.cwd) ?? nowhere))
       })
 
+      const appMachine = (machine: string) =>
+        appThere(machine).pipe(
+          Effect.tapError((error) => Effect.logWarning(`app agents on ${machine}: ${error.message}`)),
+          Effect.map((agents): Heard => ({ place: placeOf(machine, "hc"), agents })),
+          Effect.orElseSucceed((): Heard => ({ place: placeOf(machine, "hc"), agents: null }))
+        )
+
       const appElsewhere = shell.run("hc", ["machine", "ls"]).pipe(
         decodeJson(AppMachines),
         Effect.map(({ machines }) => connectedMachines(machines)),
-        Effect.orElseSucceed((): ReadonlyArray<string> => []),
-        Effect.flatMap((machines) =>
-          Effect.forEach(
-            machines,
-            (machine) =>
-              appThere(machine).pipe(
-                Effect.tapError((error) => Effect.logWarning(`app agents on ${machine}: ${error.message}`)),
-                Effect.orElseSucceed((): ReadonlyArray<LiveAgent> => [])
-              ),
-            { concurrency: 2 }
-          )
-        )
+        Effect.flatMap((machines) => Effect.forEach(machines, appMachine, { concurrency: 2 })),
+        Effect.map((heard) => ({ listed: true, heard })),
+        Effect.orElseSucceed(() => ({ listed: false, heard: [] }))
       )
 
-      const list = Effect.all([here, elsewhere, appElsewhere], { concurrency: 3 }).pipe(
-        Effect.map(([local, remote, remoteApp]) => [...local, ...remote.flat(), ...remoteApp.flat()]),
-        Effect.withSpan("Agents.list")
+      const roster = Effect.all([here, elsewhere, appElsewhere], { concurrency: 3 }).pipe(
+        Effect.map(([local, remote, inApps]): Roster => {
+          const heard = [...remote, ...inApps.heard]
+
+          return {
+            agents: [...local.agents, ...heard.flatMap((one) => one.agents ?? [])],
+            reached: [...local.reached, ...heard.flatMap((one) => (one.agents === null ? [] : [one.place]))],
+            complete: inApps.listed && heard.every((one) => one.agents !== null)
+          }
+        }),
+        Effect.withSpan("Agents.roster")
       )
+
+      const list = Effect.map(roster, (found) => found.agents)
 
       const run = (target: AgentTarget, step: Step) =>
         shell.run(step.command, step.args, step.stdin === undefined ? {} : { stdin: step.stdin }).pipe(
@@ -291,7 +316,7 @@ export class Agents extends Context.Service<
         yield* Effect.forEach(delivery.steps, (step) => run(target, step), { discard: true })
       })
 
-      return Agents.of({ list, prompt })
+      return Agents.of({ list, roster, prompt })
     })
   )
 }

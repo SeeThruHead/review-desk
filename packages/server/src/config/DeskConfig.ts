@@ -37,7 +37,8 @@ export const DeskSettings = Schema.Struct({
     Schema.Struct({ url: Schema.String, tokenFile: Schema.String, discoverOwned: Schema.optionalKey(Schema.Boolean) })
   ),
   machines: Schema.optionalKey(Schema.Array(Schema.Struct({ label: Schema.String, seat: Schema.String }))),
-  owners: Schema.optionalKey(Schema.Array(Schema.String))
+  owners: Schema.optionalKey(Schema.Array(Schema.String)),
+  claimGraceMinutes: Schema.optionalKey(Schema.Int)
 })
 export type DeskSettings = typeof DeskSettings.Type
 

@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { type Found, type Run, type Status, type TerminalHost, bracketed, bufferName, decodeJson } from "../Host.ts"
+import { type Found, type Run, type Status, commandHost, bracketed, bufferName, decodeJson } from "../Host.ts"
 
 export const CmuxWorkspaces = Schema.Struct({ workspaces: Schema.Array(Schema.Struct({ id: Schema.String })) })
 
@@ -35,10 +35,10 @@ const workspaceAgents = (run: Run, id: string) =>
     Effect.map((text) => cmuxAgent(id, sidebarFields(text)))
   )
 
-export const cmux: TerminalHost = {
-  kind: "cmux",
+export const cmux = commandHost({
+  name: "cmux",
   title: "cmux",
-  list: (run) =>
+  list: ({ run }) =>
     run({ command: "cmux", args: ["--json", "--id-format", "uuids", "list-workspaces"] }).pipe(
       decodeJson(CmuxWorkspaces),
       Effect.flatMap(({ workspaces }) =>
@@ -46,10 +46,10 @@ export const cmux: TerminalHost = {
       ),
       Effect.map((found) => found.flat())
     ),
-  send: (id, _machine, text) => [
+  steps: ({ id }, text) => [
     { command: "cmux", args: ["set-buffer", "--name", bufferName(id), bracketed(text)] },
     { command: "cmux", args: ["paste-buffer", "--name", bufferName(id), "--workspace", id] },
     { command: "cmux", args: ["send-key", "--workspace", id, "enter"] }
   ],
-  read: (id) => ({ command: "cmux", args: ["read-screen", "--workspace", id] })
-}
+  screen: ({ id }) => ({ command: "cmux", args: ["read-screen", "--workspace", id] })
+})

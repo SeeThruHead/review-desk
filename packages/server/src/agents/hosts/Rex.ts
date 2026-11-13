@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect"
-import { type Found, type Run, type Status, type TerminalHost, bracketed, decodeJson } from "../Host.ts"
+import { type Found, type Run, type Status, commandHost, bracketed, decodeJson } from "../Host.ts"
 
 export const RexSessions = Schema.Struct({ sessions: Schema.Array(Schema.Struct({ session_id: Schema.String })) })
 
@@ -111,10 +111,10 @@ const sessionBlocks = (run: Run, session: string) =>
     Effect.map(({ blocks }) => terminalBlocks(session, blocks))
   )
 
-export const rex: TerminalHost = {
-  kind: "rex",
+export const rex = commandHost({
+  name: "rex",
   title: "Rex",
-  list: (run, agentPrograms) =>
+  list: ({ run, agentPrograms }) =>
     run({ command: "rex", args: ["--autostart=false", "ls", "--json"] }).pipe(
       decodeJson(RexSessions),
       Effect.flatMap(({ sessions }) =>
@@ -125,9 +125,9 @@ export const rex: TerminalHost = {
       ),
       Effect.map((found) => found.flat())
     ),
-  send: (id, _machine, text) => [
+  steps: ({ id }, text) => [
     { command: "rex", args: ["send", ...targetArgs(id)], stdin: bracketed(text) },
     { command: "rex", args: ["send-key", ...targetArgs(id), "enter"] }
   ],
-  read: (id) => ({ command: "rex", args: ["capture", ...targetArgs(id), "--trim", "--unwrap"] })
-}
+  screen: ({ id }) => ({ command: "rex", args: ["capture", ...targetArgs(id), "--trim", "--unwrap"] })
+})

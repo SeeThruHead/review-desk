@@ -5,19 +5,19 @@ import { DeskConfig } from "../config/DeskConfig.ts"
 import { Shell } from "../platform/Shell.ts"
 import { type Roster as Sightings, placeOf } from "../desk/Gone.ts"
 import { parseAddress } from "./Address.ts"
-import { ClaudeSession, claudeAgents, inboxLine } from "./Claude.ts"
 import {
+  type AgentHost,
   type Failure,
+  type Files,
   type Found,
+  type HostEnv,
   type Run,
   type Status,
-  type Step,
-  type TerminalHost,
   agentProgramsWith,
-  decodeJson,
-  lastLines
+  decodeJson
 } from "./Host.ts"
-import { enabledHosts, enabledTerminals, terminalHosts } from "./Hosts.ts"
+import { enabledHosts, prefixesOf, shippedHosts, yieldToTerminals } from "./Hosts.ts"
+import { type PluginSpec, executableHost, pluginFile, usablePlugins } from "./hosts/Executable.ts"
 import { herdrAgents, herdrFound } from "./hosts/Herdr.ts"
 import { AppMachines, AppTerminals, appAgents, connectedMachines } from "./hosts/HerdrApp.ts"
 import { type AgentTarget, type Location, locateScript, parseLocations } from "./Remote.ts"
@@ -25,6 +25,7 @@ import { type AgentTarget, type Location, locateScript, parseLocations } from ".
 export type LiveAgent = {
   readonly name: SessionName
   readonly machine: string | null
+  readonly host: string
   readonly pane: string
   readonly cwd: string
   readonly status: Status
@@ -33,11 +34,10 @@ export type LiveAgent = {
   readonly remote: Option.Option<string>
 }
 
-type Named = Found & { readonly name: string }
-
-const shape = (found: Named, machine: string | null, where: Location): LiveAgent => ({
-  name: SessionName.make(found.name),
+const shape = (found: Found, host: string, machine: string | null, where: Location): LiveAgent => ({
+  name: SessionName.make(found.name ?? found.pane),
   machine,
+  host,
   pane: found.pane,
   cwd: found.cwd,
   status: found.status,
@@ -45,8 +45,6 @@ const shape = (found: Named, machine: string | null, where: Location): LiveAgent
   branch: where.branch,
   remote: where.remote
 })
-
-const named = (found: Found): Named => ({ ...found, name: found.name ?? found.pane })
 
 export class AgentsUnavailable extends Schema.TaggedError<AgentsUnavailable, { readonly brand: unique symbol }>()(
   "AgentsUnavailable",
@@ -80,11 +78,11 @@ export class ReadFailed extends Schema.TaggedError<ReadFailed, { readonly brand:
 
 const sendTimeout = "5 seconds"
 
-const postToSocket = (socketPath: string, text: string) =>
+const postLine = (socketPath: string, line: string) =>
   Effect.callback<void, Error>((resume) => {
     const connection = createConnection(socketPath)
     connection.once("error", (error) => resume(Effect.fail(error)))
-    connection.once("connect", () => connection.end(inboxLine(text), () => resume(Effect.void)))
+    connection.once("connect", () => connection.end(line, () => resume(Effect.void)))
 
     return Effect.sync(() => connection.destroy())
   }).pipe(Effect.timeout(sendTimeout))
@@ -92,9 +90,12 @@ const postToSocket = (socketPath: string, text: string) =>
 const failed = (target: AgentTarget) => (error: Failure) =>
   new PromptFailed({ agent: target.pane, reason: error.message })
 
+const unreadable = (target: AgentTarget) => (error: Failure) =>
+  new ReadFailed({ agent: target.pane, reason: error.message })
+
 type Heard = { readonly place: string; readonly agents: ReadonlyArray<LiveAgent> | null }
 
-type Asked = { readonly host: TerminalHost; readonly found: Option.Option<ReadonlyArray<Found>> }
+type Asked = { readonly host: AgentHost; readonly found: Option.Option<ReadonlyArray<Found>> }
 
 export type Roster = Omit<Sightings, "agents"> & { readonly agents: ReadonlyArray<LiveAgent> }
 
@@ -116,13 +117,36 @@ export class Agents extends Context.Service<
       const config = yield* DeskConfig
       const home = yield* Config.String("HOME").pipe(Config.withDefault("."))
       const claudeHome = yield* Config.String("CLAUDE_CONFIG_DIR").pipe(Config.withDefault(path.join(home, ".claude")))
-      const sessionsDirectory = path.join(claudeHome, "sessions")
-      const agentPrograms = agentProgramsWith(config.agentCommands)
-      const askedHosts = enabledTerminals(config.hosts)
-      const claudeOn = enabledHosts(config.hosts).includes("claude")
 
-      const run: Run = (step: Step) =>
-        shell.run(step.command, step.args, step.stdin === undefined ? {} : { stdin: step.stdin })
+      const run: Run = (step) =>
+        shell.run(step.command, step.args, {
+          ...(step.stdin === undefined ? {} : { stdin: step.stdin }),
+          ...(step.env === undefined ? {} : { env: step.env })
+        })
+
+      const files: Files = {
+        readText: (file) => fs.readFileString(file),
+        list: (directory) => fs.readDirectory(directory),
+        exists: (file) => fs.exists(file).pipe(Effect.orElseSucceed(() => false))
+      }
+
+      const env: HostEnv = { run, files, postLine, agentPrograms: agentProgramsWith(config.agentCommands) }
+
+      const pluginsDirectory = path.join(config.home, "plugins")
+      const dropped = yield* files.list(pluginsDirectory).pipe(
+        Effect.map((names) => names.toSorted().flatMap((name) => pluginFile(pluginsDirectory, name))),
+        Effect.orElseSucceed((): ReadonlyArray<PluginSpec> => [])
+      )
+      const plugins = usablePlugins([...(config.plugins ?? []), ...dropped])
+      yield* Effect.forEach(plugins.refused, (one) =>
+        Effect.logWarning(`left out the ${one.name} plugin: ${one.reason}`)
+      )
+      yield* Effect.forEach(plugins.usable, (one) => Effect.logInfo(`loaded the ${one.name} host plugin`))
+
+      const everyHost = [...shippedHosts(path.join(claudeHome, "sessions")), ...plugins.usable.map(executableHost)]
+      const askedHosts = enabledHosts(everyHost, config.hosts)
+      const prefixes = prefixesOf(everyHost)
+      const hostOf = (pane: string) => parseAddress(pane, prefixes).host
 
       const git = (cwd: string, args: ReadonlyArray<string>) =>
         shell.run("git", ["-C", cwd, ...args]).pipe(
@@ -130,56 +154,30 @@ export class Agents extends Context.Service<
           Effect.option
         )
 
-      const ask = (host: TerminalHost) =>
-        host.list(run, agentPrograms).pipe(
+      const ask = (host: AgentHost) =>
+        host.list(env).pipe(
           Effect.tapError((error) => Effect.logDebug(`${host.title} did not answer: ${error.message}`)),
           Effect.option,
           Effect.map((found): Asked => ({ host, found }))
         )
 
-      const readSession = (file: string) =>
-        fs.readFileString(path.join(sessionsDirectory, file)).pipe(decodeJson(ClaudeSession), Effect.option)
-
-      const liveSocket = (session: ClaudeSession) =>
-        session.messagingSocketPath === undefined
-          ? Effect.succeed(false)
-          : fs.exists(session.messagingSocketPath).pipe(Effect.orElseSucceed(() => false))
-
-      const claudeSessions = fs.readDirectory(sessionsDirectory).pipe(
-        Effect.flatMap((files) =>
-          Effect.forEach(
-            files.filter((file) => file.endsWith(".json")),
-            readSession,
-            { concurrency: 8 }
-          )
-        ),
-        Effect.map((found) => found.flatMap(Option.toArray)),
-        Effect.flatMap((sessions) => Effect.filter(sessions, liveSocket, { concurrency: 8 })),
-        Effect.orElseSucceed((): ReadonlyArray<ClaudeSession> => [])
-      )
-
-      const sessionsHere = claudeOn ? claudeSessions : Effect.succeed<ReadonlyArray<ClaudeSession>>([])
-
-      const locateHere = Effect.fnUntraced(function* (found: Named) {
+      const locateHere = Effect.fnUntraced(function* (found: Found) {
         const [branch, remote] = yield* Effect.all(
           [git(found.cwd, ["rev-parse", "--abbrev-ref", "HEAD"]), git(found.cwd, ["remote", "get-url", "origin"])],
           { concurrency: 2 }
         )
 
-        return shape(found, null, { branch, remote })
+        return shape(found, hostOf(found.pane), null, { branch, remote })
       })
 
       const here = Effect.gen(function* () {
-        const [asked, sessions] = yield* Effect.all(
-          [Effect.forEach(askedHosts, ask, { concurrency: 6 }), sessionsHere],
-          { concurrency: 2 }
+        const asked = yield* Effect.forEach(askedHosts, ask, { concurrency: 6 })
+        const answered = asked.flatMap((one) =>
+          Option.isSome(one.found) ? [{ host: one.host, agents: one.found.value }] : []
         )
-        const inTerminals = asked.flatMap((one) => Option.getOrElse(one.found, () => [])).map(named)
-        const all = [...inTerminals, ...claudeAgents(sessions, inTerminals).map(named)]
-        const reached = asked.flatMap((one) => (Option.isSome(one.found) ? [placeOf(null, one.host.kind)] : []))
-        const agents = yield* Effect.forEach(all, locateHere, { concurrency: 4 })
+        const agents = yield* Effect.forEach(yieldToTerminals(answered), locateHere, { concurrency: 4 })
 
-        return { agents, reached: claudeOn ? [...reached, placeOf(null, "claude")] : reached }
+        return { agents, reached: answered.map((one) => placeOf(null, one.host.name)) }
       })
 
       const nowhere: Location = { branch: Option.none(), remote: Option.none() }
@@ -190,7 +188,7 @@ export class Agents extends Context.Service<
         const found = yield* shell.run("sth-seat", ["run", machine.seat, "-n", "--", locateScript(cwds)])
         const where = parseLocations(found)
 
-        return agents.map((agent) => shape(herdrFound(agent), machine.label, where.get(agent.cwd) ?? nowhere))
+        return agents.map((agent) => shape(herdrFound(agent), "herdr", machine.label, where.get(agent.cwd) ?? nowhere))
       })
 
       const elsewhere = Effect.forEach(
@@ -217,7 +215,7 @@ export class Agents extends Context.Service<
         const located = yield* locateOn(machine, [...new Set(found.map((agent) => agent.cwd))])
         const where = parseLocations(located)
 
-        return found.map((agent) => shape(named(agent), machine, where.get(agent.cwd) ?? nowhere))
+        return found.map((agent) => shape(agent, "hc", machine, where.get(agent.cwd) ?? nowhere))
       })
 
       const appMachine = (machine: string) =>
@@ -227,9 +225,7 @@ export class Agents extends Context.Service<
           Effect.orElseSucceed((): Heard => ({ place: placeOf(machine, "hc"), agents: null }))
         )
 
-      const appOn = enabledHosts(config.hosts).includes("hc")
-
-      const appElsewhere = appOn
+      const appElsewhere = askedHosts.some((host) => host.name === "hc")
         ? shell.run("hc", ["machine", "ls"]).pipe(
             decodeJson(AppMachines),
             Effect.map(({ machines }) => connectedMachines(machines)),
@@ -246,7 +242,8 @@ export class Agents extends Context.Service<
           return {
             agents: [...local.agents, ...heard.flatMap((one) => one.agents ?? [])],
             reached: [...local.reached, ...heard.flatMap((one) => (one.agents === null ? [] : [one.place]))],
-            complete: inApps.listed && heard.every((one) => one.agents !== null)
+            complete: inApps.listed && heard.every((one) => one.agents !== null),
+            prefixes
           }
         }),
         Effect.withSpan("Agents.roster")
@@ -254,30 +251,25 @@ export class Agents extends Context.Service<
 
       const list = Effect.map(roster, (found) => found.agents)
 
-      const promptClaude = Effect.fnUntraced(function* (target: AgentTarget, id: string, text: string) {
-        const sessions = yield* claudeSessions
-        const socket = sessions.find((session) => session.sessionId === id)?.messagingSocketPath
-        if (socket === undefined) return yield* failed(target)({ message: "the session has no inbox socket" })
-        yield* postToSocket(socket, text).pipe(Effect.mapError(failed(target)))
-      })
+      const hostFor = (target: AgentTarget) => {
+        const address = parseAddress(target.pane, prefixes)
+        const host = everyHost.find((one) => one.name === address.host)
+
+        return host === undefined
+          ? Effect.fail({ message: `no host is named ${address.host}` })
+          : Effect.succeed({ host, target: { id: address.id, machine: target.machine } })
+      }
 
       const prompt = Effect.fn("Agents.prompt")(function* (target: AgentTarget, text: string) {
         yield* Effect.annotateCurrentSpan("agent", target.pane)
-        const address = parseAddress(target.pane)
-        if (address.host === "claude") return yield* promptClaude(target, address.id, text)
-        const steps = terminalHosts[address.host].send(address.id, target.machine, text)
-        yield* Effect.forEach(steps, (step) => run(step).pipe(Effect.mapError(failed(target))), { discard: true })
+        const found = yield* hostFor(target).pipe(Effect.mapError(failed(target)))
+        yield* found.host.send(env, found.target, text).pipe(Effect.mapError(failed(target)))
       })
 
       const read = Effect.fn("Agents.read")(function* (target: AgentTarget, lines: number) {
-        const address = parseAddress(target.pane)
-        const unreadable = (error: Failure) => new ReadFailed({ agent: target.pane, reason: error.message })
-        if (address.host === "claude") return yield* unreadable({ message: "a Claude Code session has no screen" })
-        const text = yield* run(terminalHosts[address.host].read(address.id, target.machine, lines)).pipe(
-          Effect.mapError(unreadable)
-        )
+        const found = yield* hostFor(target).pipe(Effect.mapError(unreadable(target)))
 
-        return lastLines(text, lines)
+        return yield* found.host.read(env, found.target, lines).pipe(Effect.mapError(unreadable(target)))
       })
 
       return Agents.of({ list, roster, prompt, read })

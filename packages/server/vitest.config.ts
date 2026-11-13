@@ -20,7 +20,6 @@ export default defineConfig({
         "src/agents/Address.ts",
         "src/agents/Host.ts",
         "src/agents/Hosts.ts",
-        "src/agents/Claude.ts",
         "src/agents/hosts/*.ts",
         "src/store/DeskRepo.ts",
         "src/desk/Health.ts",

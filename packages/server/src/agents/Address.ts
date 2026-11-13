@@ -1,24 +1,21 @@
 import { Option } from "effect"
 
-export const hostKinds = ["hc", "cmux", "orca", "rex", "tmux", "claude"] as const
+export const shippedHostNames = ["herdr", "hc", "cmux", "orca", "rex", "tmux", "claude"] as const
 
-export const allHostKinds = ["herdr", ...hostKinds] as const
+export type ShippedHostName = (typeof shippedHostNames)[number]
 
-export type HostKind = "herdr" | (typeof hostKinds)[number]
+export const unprefixedHost = "herdr"
 
-export type TerminalKind = Exclude<HostKind, "claude">
+export type Address = { readonly host: string; readonly id: string }
 
-export type Address = { readonly host: HostKind; readonly id: string }
+export const addressOf = (host: string, id: string): string => (host === unprefixedHost ? id : `${host}:${id}`)
 
-export const addressText = (address: Address): string =>
-  address.host === "herdr" ? address.id : `${address.host}:${address.id}`
+export const addressText = (address: Address): string => addressOf(address.host, address.id)
 
-const prefixed = (text: string) => hostKinds.find((host) => text.startsWith(`${host}:`))
+export const parseAddress = (text: string, prefixes: ReadonlyArray<string>): Address => {
+  const host = prefixes.find((prefix) => prefix !== unprefixedHost && text.startsWith(`${prefix}:`))
 
-export const parseAddress = (text: string): Address => {
-  const host = prefixed(text)
-
-  return host === undefined ? { host: "herdr", id: text } : { host, id: text.slice(host.length + 1) }
+  return host === undefined ? { host: unprefixedHost, id: text } : { host, id: text.slice(host.length + 1) }
 }
 
 export type CallerEnv = {

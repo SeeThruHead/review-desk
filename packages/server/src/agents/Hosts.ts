@@ -1,5 +1,5 @@
-import { type HostKind, type TerminalKind, allHostKinds } from "./Address.ts"
-import type { TerminalHost } from "./Host.ts"
+import type { AgentHost, Found } from "./Host.ts"
+import { claudeHost } from "./hosts/Claude.ts"
 import { cmux } from "./hosts/Cmux.ts"
 import { herdr } from "./hosts/Herdr.ts"
 import { herdrApp } from "./hosts/HerdrApp.ts"
@@ -7,17 +7,31 @@ import { orca } from "./hosts/Orca.ts"
 import { rex } from "./hosts/Rex.ts"
 import { tmux } from "./hosts/Tmux.ts"
 
-export const terminalHosts: { readonly [K in TerminalKind]: TerminalHost } = {
+export const shippedHosts = (claudeSessions: string): ReadonlyArray<AgentHost> => [
   herdr,
-  hc: herdrApp,
+  herdrApp,
   cmux,
   orca,
   rex,
-  tmux
+  tmux,
+  claudeHost(claudeSessions)
+]
+
+export const enabledHosts = (
+  hosts: ReadonlyArray<AgentHost>,
+  chosen: ReadonlyArray<string> | undefined
+): ReadonlyArray<AgentHost> => (chosen === undefined ? hosts : hosts.filter((host) => chosen.includes(host.name)))
+
+export const prefixesOf = (hosts: ReadonlyArray<AgentHost>): ReadonlyArray<string> => hosts.map((host) => host.name)
+
+export const yieldToTerminals = (
+  found: ReadonlyArray<{ readonly host: AgentHost; readonly agents: ReadonlyArray<Found> }>
+): ReadonlyArray<Found> => {
+  const terminals = found.filter((one) => !one.host.yieldsToTerminals).flatMap((one) => one.agents)
+  const yielding = found
+    .filter((one) => one.host.yieldsToTerminals)
+    .flatMap((one) => one.agents)
+    .filter((agent) => !terminals.some((terminal) => terminal.cwd === agent.cwd))
+
+  return [...terminals, ...yielding]
 }
-
-export const enabledHosts = (chosen: ReadonlyArray<HostKind> | undefined): ReadonlyArray<HostKind> =>
-  chosen === undefined ? allHostKinds : allHostKinds.filter((kind) => chosen.includes(kind))
-
-export const enabledTerminals = (chosen: ReadonlyArray<HostKind> | undefined): ReadonlyArray<TerminalHost> =>
-  Object.values(terminalHosts).filter((host) => enabledHosts(chosen).includes(host.kind))

@@ -45,7 +45,6 @@ import {
   Stream,
   SubscriptionRef
 } from "effect"
-import { parseAddress } from "../agents/Address.ts"
 import { Agents, type LiveAgent, type Roster } from "../agents/Agents.ts"
 import { type AgentTarget, targetFor } from "../agents/Remote.ts"
 import { DeskConfig } from "../config/DeskConfig.ts"
@@ -228,7 +227,7 @@ export class Desk extends Context.Service<
 
       const claimGraceMinutes = config.claimGraceMinutes ?? 30
 
-      const noRoster: Roster = { agents: [], reached: [], complete: false }
+      const noRoster: Roster = { agents: [], reached: [], complete: false, prefixes: [] }
 
       const roster = agents.roster.pipe(
         Effect.tapError((error) => Effect.logWarning(error.message)),
@@ -646,7 +645,7 @@ export class Desk extends Context.Service<
         agents: found.agents.map((agent) => ({
           name: agent.name,
           machine: agent.machine,
-          host: parseAddress(agent.pane).host,
+          host: agent.host,
           pane: agent.pane,
           cwd: agent.cwd,
           status: agent.status

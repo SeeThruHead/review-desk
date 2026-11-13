@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Option } from "effect"
-import { addressText, callerAddress, parseAddress } from "./Address.ts"
+import { addressText, callerAddress, parseAddress, shippedHostNames } from "./Address.ts"
 
 const none = {
   herdrPane: Option.none(),
@@ -14,16 +14,21 @@ const none = {
 
 describe("where a message for an agent goes", () => {
   it("reads a Herdr pane as it is and every other host by its prefix", () => {
-    expect(parseAddress("w1:p2")).toEqual({ host: "herdr", id: "w1:p2" })
-    expect(parseAddress("hc:t11")).toEqual({ host: "hc", id: "t11" })
-    expect(parseAddress("tmux:%3")).toEqual({ host: "tmux", id: "%3" })
-    expect(parseAddress("rex:session:01/block:02")).toEqual({ host: "rex", id: "session:01/block:02" })
-    expect(parseAddress("claude:5f1c")).toEqual({ host: "claude", id: "5f1c" })
+    expect(parseAddress("w1:p2", shippedHostNames)).toEqual({ host: "herdr", id: "w1:p2" })
+    expect(parseAddress("hc:t11", shippedHostNames)).toEqual({ host: "hc", id: "t11" })
+    expect(parseAddress("tmux:%3", shippedHostNames)).toEqual({ host: "tmux", id: "%3" })
+    expect(parseAddress("rex:session:01/block:02", shippedHostNames)).toEqual({
+      host: "rex",
+      id: "session:01/block:02"
+    })
+    expect(parseAddress("claude:5f1c", shippedHostNames)).toEqual({ host: "claude", id: "5f1c" })
+    expect(parseAddress("zellij:main/1", [...shippedHostNames, "zellij"])).toEqual({ host: "zellij", id: "main/1" })
+    expect(parseAddress("zellij:main/1", shippedHostNames)).toEqual({ host: "herdr", id: "zellij:main/1" })
   })
 
   it("writes an address back the way it was read", () => {
-    expect(addressText(parseAddress("w1:p2"))).toBe("w1:p2")
-    expect(addressText(parseAddress("cmux:ab-12"))).toBe("cmux:ab-12")
+    expect(addressText(parseAddress("w1:p2", shippedHostNames))).toBe("w1:p2")
+    expect(addressText(parseAddress("cmux:ab-12", shippedHostNames))).toBe("cmux:ab-12")
   })
 
   it("takes the caller's own terminal, preferring the Herdr TUI, then the app, then the others", () => {

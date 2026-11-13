@@ -1,14 +1,15 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
-import { InboxLine, claudeAgents, inboxLine } from "./Claude.ts"
-import { type Run, bracketed, bufferName, agentProgramsWith, lastLines, statusOf } from "./Host.ts"
-import { enabledHosts, enabledTerminals, terminalHosts } from "./Hosts.ts"
-import { cmuxAgent, sidebarFields } from "./hosts/Cmux.ts"
-import { herdrFound } from "./hosts/Herdr.ts"
-import { appAgents, connectedMachines } from "./hosts/HerdrApp.ts"
-import { orcaAgents } from "./hosts/Orca.ts"
-import { rexAgent, rexStatus, rexTarget, terminalBlocks } from "./hosts/Rex.ts"
-import { screenStatus, tmuxPanes } from "./hosts/Tmux.ts"
+import { Effect, Ref, Schema } from "effect"
+import { type HostEnv, type Run, agentProgramsWith, bracketed, bufferName, lastLines, statusOf } from "./Host.ts"
+import { enabledHosts, prefixesOf, shippedHosts, yieldToTerminals } from "./Hosts.ts"
+import { InboxLine, claudeHost, inboxLine } from "./hosts/Claude.ts"
+import { cmux, cmuxAgent, sidebarFields } from "./hosts/Cmux.ts"
+import { executableHost, pluginFile, usablePlugins } from "./hosts/Executable.ts"
+import { herdr, herdrFound } from "./hosts/Herdr.ts"
+import { appAgents, connectedMachines, herdrApp } from "./hosts/HerdrApp.ts"
+import { orca, orcaAgents } from "./hosts/Orca.ts"
+import { rex, rexAgent, rexStatus, rexTarget, terminalBlocks } from "./hosts/Rex.ts"
+import { screenStatus, tmux, tmuxPanes } from "./hosts/Tmux.ts"
 
 const answering =
   (answers: ReadonlyMap<string, string>): Run =>
@@ -21,7 +22,24 @@ const answering =
 
 const agentPrograms = agentProgramsWith(undefined)
 
+const noFiles = {
+  readText: (file: string) => Effect.fail({ message: `no file ${file}` }),
+  list: (directory: string) => Effect.fail({ message: `no folder ${directory}` }),
+  exists: () => Effect.succeed(false)
+}
+
+const envWith = (run: Run, files: HostEnv["files"] = noFiles): HostEnv => ({
+  run,
+  files,
+  postLine: () => Effect.fail({ message: "no sockets here" }),
+  agentPrograms
+})
+
 const json = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+const session = (id: string, fields: object) => json({ sessionId: id, cwd: `/w/${id}`, ...fields })
+
+const spec = (name: string) => ({ name, command: ["/p/x"] as const })
 
 const call = (block: string, method: string) => `rex block call -s s1 -b ${block} ${method}`
 
@@ -52,11 +70,50 @@ describe("what every host shares", () => {
   })
 
   it("asks every host by default, or only the ones the config names", () => {
-    expect(enabledHosts(undefined)).toEqual(["herdr", "hc", "cmux", "orca", "rex", "tmux", "claude"])
-    expect(enabledHosts(["tmux", "claude"])).toEqual(["tmux", "claude"])
-    expect(enabledTerminals(undefined).map((host) => host.kind)).toEqual(["herdr", "hc", "cmux", "orca", "rex", "tmux"])
-    expect(enabledTerminals(["claude", "rex"]).map((host) => host.kind)).toEqual(["rex"])
+    const hosts = shippedHosts("/c/sessions")
+
+    expect(prefixesOf(hosts)).toEqual(["herdr", "hc", "cmux", "orca", "rex", "tmux", "claude"])
+    expect(enabledHosts(hosts, undefined)).toEqual(hosts)
+    expect(prefixesOf(enabledHosts(hosts, ["tmux", "claude"]))).toEqual(["tmux", "claude"])
   })
+
+  it("leaves out an agent from a yielding host where a terminal agent already works in that folder", () => {
+    const [terminal, claude] = [shippedHosts("/c")[0], shippedHosts("/c")[6]]
+    const inPane = { pane: "w1:p1", cwd: "/w/web", status: "idle" as const }
+    const sessions = [
+      { pane: "claude:s1", cwd: "/w/web", status: "idle" as const },
+      { pane: "claude:s2", cwd: "/w/api", status: "working" as const }
+    ]
+
+    expect(
+      terminal === undefined || claude === undefined
+        ? []
+        : yieldToTerminals([
+            { host: claude, agents: sessions },
+            { host: terminal, agents: [inPane] }
+          ])
+    ).toEqual([inPane, sessions[1]])
+  })
+
+  it.effect("sends every step of a command host in order and keeps the last lines it read", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<ReadonlyArray<string>>([])
+      const run: Run = (step) =>
+        Ref.update(seen, (all) => [...all, [step.command, ...step.args].join(" ")]).pipe(Effect.as("a\nb\nc\n"))
+      yield* tmux.send(envWith(run), { id: "%3", machine: null }, "hi")
+      const screen = yield* tmux.read(envWith(run), { id: "%3", machine: null }, 2)
+
+      const steps = yield* Ref.get(seen)
+
+      expect(steps).toEqual([
+        "tmux load-buffer -b review-desk-3 -",
+        "tmux paste-buffer -p -d -b review-desk-3 -t %3",
+        "tmux send-keys -t %3 Enter",
+        "tmux capture-pane -p -t %3 -S -2"
+      ])
+      expect(screen).toBe("b\nc")
+    })
+  )
 })
 
 describe("the Herdr TUI", () => {
@@ -71,10 +128,7 @@ describe("the Herdr TUI", () => {
           ]
         }
       }
-      const found = yield* terminalHosts.herdr.list(
-        answering(new Map([["herdr agent list", json(listed)]])),
-        agentPrograms
-      )
+      const found = yield* herdr.list(envWith(answering(new Map([["herdr agent list", json(listed)]]))))
 
       expect(found).toEqual([
         { name: "auth", pane: "w1:p1", cwd: "/w/api", status: "working" },
@@ -85,13 +139,13 @@ describe("the Herdr TUI", () => {
   )
 
   it("prompts and reads a pane, naming the machine when it is elsewhere", () => {
-    expect(terminalHosts.herdr.send("w1:p2", null, "hi")).toEqual([
+    expect(herdr.steps({ id: "w1:p2", machine: null }, "hi")).toEqual([
       { command: "herdr", args: ["agent", "prompt", "w1:p2", "hi"] }
     ])
-    expect(terminalHosts.herdr.send("w3:p1", "devbox", "hi")).toEqual([
+    expect(herdr.steps({ id: "w3:p1", machine: "devbox" }, "hi")).toEqual([
       { command: "herdr", args: ["--machine", "devbox", "agent", "prompt", "w3:p1", "hi"] }
     ])
-    expect(terminalHosts.herdr.read("w3:p1", "devbox", 40)).toEqual({
+    expect(herdr.screen({ id: "w3:p1", machine: "devbox" }, 40)).toEqual({
       command: "herdr",
       args: ["--machine", "devbox", "agent", "read", "w3:p1", "--lines", "40"]
     })
@@ -146,13 +200,16 @@ describe("the Herdr app", () => {
   it.effect("lists, sends and reads with hc", () =>
     Effect.gen(function* () {
       const listed = { terminals: [{ address: "t3", agent: "pi", cwd: "/w", state: "live", status: "idle" }] }
-      const found = yield* terminalHosts.hc.list(answering(new Map([["hc ls --json", json(listed)]])), agentPrograms)
+      const found = yield* herdrApp.list(envWith(answering(new Map([["hc ls --json", json(listed)]]))))
 
       expect(found).toEqual([{ pane: "hc:t3", cwd: "/w", status: "idle" }])
-      expect(terminalHosts.hc.send("devbox/t2b", "devbox", "hi")).toEqual([
+      expect(herdrApp.steps({ id: "devbox/t2b", machine: "devbox" }, "hi")).toEqual([
         { command: "hc", args: ["send", "devbox/t2b", "hi"] }
       ])
-      expect(terminalHosts.hc.read("t3", null, 20)).toEqual({ command: "hc", args: ["read", "t3", "--lines", "20"] })
+      expect(herdrApp.screen({ id: "t3", machine: null }, 20)).toEqual({
+        command: "hc",
+        args: ["read", "t3", "--lines", "20"]
+      })
     })
   )
 })
@@ -182,15 +239,15 @@ describe("cmux", () => {
         ])
       )
 
-      const found = yield* terminalHosts.cmux.list(run, agentPrograms)
+      const found = yield* cmux.list(envWith(run))
 
       expect(found).toEqual([{ pane: "cmux:a", cwd: "/w/a", status: "idle" }])
-      expect(terminalHosts.cmux.send("ws-1", null, "a\nb")).toEqual([
+      expect(cmux.steps({ id: "ws-1", machine: null }, "a\nb")).toEqual([
         { command: "cmux", args: ["set-buffer", "--name", "review-desk-ws1", "\u001b[200~a\nb\u001b[201~"] },
         { command: "cmux", args: ["paste-buffer", "--name", "review-desk-ws1", "--workspace", "ws-1"] },
         { command: "cmux", args: ["send-key", "--workspace", "ws-1", "enter"] }
       ])
-      expect(terminalHosts.cmux.read("ws-1", null, 40)).toEqual({
+      expect(cmux.screen({ id: "ws-1", machine: null }, 40)).toEqual({
         command: "cmux",
         args: ["read-screen", "--workspace", "ws-1"]
       })
@@ -221,13 +278,13 @@ describe("Orca", () => {
       }
       const run = answering(new Map([["orca terminal list --json", json(listed)]]))
 
-      const found = yield* terminalHosts.orca.list(run, agentPrograms)
+      const found = yield* orca.list(envWith(run))
 
       expect(found).toEqual([{ pane: "orca:o1", cwd: "/w", status: "unknown" }])
-      expect(terminalHosts.orca.send("o1", null, "hi")).toEqual([
+      expect(orca.steps({ id: "o1", machine: null }, "hi")).toEqual([
         { command: "orca", args: ["terminal", "send", "--terminal", "o1", "--text", "hi", "--enter"] }
       ])
-      expect(terminalHosts.orca.read("o1", null, 40)).toEqual({
+      expect(orca.screen({ id: "o1", machine: null }, 40)).toEqual({
         command: "orca",
         args: ["terminal", "read", "--terminal", "o1", "--screen"]
       })
@@ -263,7 +320,7 @@ describe("tmux", () => {
         ])
       )
 
-      const found = yield* terminalHosts.tmux.list(run, agentPrograms)
+      const found = yield* tmux.list(envWith(run))
 
       expect(found).toEqual([
         { pane: "tmux:%1", cwd: "/w/api", status: "working" },
@@ -273,12 +330,12 @@ describe("tmux", () => {
   )
 
   it("pastes as one block from stdin, presses enter and reads recent lines", () => {
-    expect(terminalHosts.tmux.send("%3", null, "a\nb")).toEqual([
+    expect(tmux.steps({ id: "%3", machine: null }, "a\nb")).toEqual([
       { command: "tmux", args: ["load-buffer", "-b", "review-desk-3", "-"], stdin: "a\nb" },
       { command: "tmux", args: ["paste-buffer", "-p", "-d", "-b", "review-desk-3", "-t", "%3"] },
       { command: "tmux", args: ["send-keys", "-t", "%3", "Enter"] }
     ])
-    expect(terminalHosts.tmux.read("%3", null, 40)).toEqual({
+    expect(tmux.screen({ id: "%3", machine: null }, 40)).toEqual({
       command: "tmux",
       args: ["capture-pane", "-p", "-t", "%3", "-S", "-40"]
     })
@@ -331,14 +388,14 @@ describe("Rex", () => {
   it("addresses a block in its session, or by its id alone", () => {
     expect(rexTarget("session:01/block:02")).toEqual({ session: "session:01", block: "block:02" })
     expect(rexTarget("block:02")).toEqual({ session: "", block: "block:02" })
-    expect(terminalHosts.rex.read("block:02", null, 40)).toEqual({
+    expect(rex.screen({ id: "block:02", machine: null }, 40)).toEqual({
       command: "rex",
       args: ["capture", "-b", "block:02", "--trim", "--unwrap"]
     })
   })
 
   it("pastes as one block from stdin and presses enter", () => {
-    expect(terminalHosts.rex.send("session:01/block:02", null, "a\nb")).toEqual([
+    expect(rex.steps({ id: "session:01/block:02", machine: null }, "a\nb")).toEqual([
       { command: "rex", args: ["send", "-s", "session:01", "-b", "block:02"], stdin: "\u001b[200~a\nb\u001b[201~" },
       { command: "rex", args: ["send-key", "-s", "session:01", "-b", "block:02", "enter"] }
     ])
@@ -367,7 +424,7 @@ describe("Rex", () => {
         ])
       )
 
-      const found = yield* terminalHosts.rex.list(run, agentPrograms)
+      const found = yield* rex.list(envWith(run))
 
       expect(found).toEqual([
         { pane: "rex:s1/b1", cwd: "/w/api", status: "working" },
@@ -377,26 +434,111 @@ describe("Rex", () => {
   )
 })
 
-describe("Claude Code sessions with no terminal of their own", () => {
-  it("adds sessions that can take a message and are not already a terminal agent", () => {
-    const sessions = [
-      { sessionId: "s1", cwd: "/w/api", status: "busy", messagingSocketPath: "/s/1" },
-      { sessionId: "s2", cwd: "/w/web", status: "idle", messagingSocketPath: "/s/2" },
-      { sessionId: "s3", cwd: "/w/cli" },
-      { sessionId: "s4", cwd: "/w/docs", messagingSocketPath: "/s/4" }
-    ]
+describe("Claude Code sessions", () => {
+  const files = {
+    readText: (file: string) =>
+      file === "/c/s1.json"
+        ? Effect.succeed(session("s1", { status: "busy", messagingSocketPath: "/sock/1" }))
+        : file === "/c/s2.json"
+          ? Effect.succeed(session("s2", { messagingSocketPath: "/sock/gone" }))
+          : file === "/c/s3.json"
+            ? Effect.succeed(session("s3", {}))
+            : Effect.succeed("not json"),
+    list: () => Effect.succeed(["s1.json", "s2.json", "s3.json", "s4.json", "notes.txt"]),
+    exists: (file: string) => Effect.succeed(file === "/sock/1")
+  }
+  const claude = claudeHost("/c")
 
-    expect(claudeAgents(sessions, [{ pane: "w1:p1", cwd: "/w/web", status: "idle" }])).toEqual([
-      { pane: "claude:s1", cwd: "/w/api", status: "working" },
-      { pane: "claude:s4", cwd: "/w/docs", status: "unknown" }
-    ])
-  })
+  it.effect("lists the sessions that have a live inbox, with what each is doing", () =>
+    Effect.gen(function* () {
+      const found = yield* claude.list(envWith(answering(new Map()), files))
 
-  it("writes a message as one user line for the session's inbox", () => {
+      expect(claude.yieldsToTerminals).toBe(true)
+      expect(found).toEqual([{ pane: "claude:s1", cwd: "/w/s1", status: "working" }])
+    })
+  )
+
+  it.effect("hands a message to the session's inbox as one user line, and has no screen to read", () =>
+    Effect.gen(function* () {
+      const posted = yield* Ref.make<ReadonlyArray<string>>([])
+      const env = {
+        ...envWith(answering(new Map()), files),
+        postLine: (socket: string, line: string) => Ref.update(posted, (all) => [...all, `${socket} ${line}`])
+      }
+      yield* claude.send(env, { id: "s1", machine: null }, "hello")
+      const missing = yield* Effect.flip(claude.send(env, { id: "s2", machine: null }, "hello"))
+      const screen = yield* Effect.flip(claude.read(env, { id: "s1", machine: null }, 10))
+
+      const lines = yield* Ref.get(posted)
+
+      expect(lines).toEqual([`/sock/1 ${inboxLine("hello")}`])
+      expect(missing.message).toBe("the session has no inbox socket")
+      expect(screen.message).toBe("a Claude Code session has no screen")
+    })
+  )
+
+  it("writes the message as a user line the inbox can read", () => {
     expect(Schema.decodeSync(Schema.fromJsonString(InboxLine))(inboxLine("hello"))).toEqual({
       type: "user",
       message: { role: "user", content: "hello" }
     })
-    expect(inboxLine("x").endsWith("\n")).toBe(true)
+  })
+})
+
+describe("a host plugin someone drops in", () => {
+  const zellij = executableHost({ name: "zellij", command: ["/p/zellij-host", "--quiet"] })
+
+  it("takes a file in the plugins folder as a plugin named after it, skipping hidden files", () => {
+    expect(pluginFile("/home/plugins", "zellij.sh")).toEqual([{ name: "zellij", command: ["/home/plugins/zellij.sh"] }])
+    expect(pluginFile("/home/plugins", "wezterm")).toEqual([{ name: "wezterm", command: ["/home/plugins/wezterm"] }])
+    expect(pluginFile("/home/plugins", ".DS_Store")).toEqual([])
+  })
+
+  it("refuses a plugin with a bad name, a shipped host's name, or a name already taken", () => {
+    expect(usablePlugins([spec("zellij"), spec("Zel lij"), spec("tmux"), spec("zellij"), spec("wezterm")])).toEqual({
+      usable: [spec("zellij"), spec("wezterm")],
+      refused: [
+        { name: "Zel lij", reason: "a plugin name is lowercase letters, digits and dashes, starting with a letter" },
+        { name: "tmux", reason: "a shipped host already has that name" },
+        { name: "zellij", reason: "another plugin already has that name" }
+      ]
+    })
+  })
+
+  it.effect("lists through the executable's list command, telling it the agent programs", () =>
+    Effect.gen(function* () {
+      const told = yield* Ref.make("")
+      const run: Run = (step) =>
+        Ref.set(told, step.env?.["REVIEW_DESK_AGENT_PROGRAMS"] ?? "").pipe(
+          Effect.as(
+            json({
+              agents: [
+                { id: "main/1", cwd: "/w/api", status: "working", name: "auth" },
+                { id: "main/2", cwd: "/w/web" }
+              ]
+            })
+          )
+        )
+      const found = yield* zellij.list(envWith(run))
+
+      expect(found).toEqual([
+        { pane: "zellij:main/1", cwd: "/w/api", status: "working", name: "auth" },
+        { pane: "zellij:main/2", cwd: "/w/web", status: "unknown" }
+      ])
+      const programs = yield* Ref.get(told)
+
+      expect(programs.split(",")).toContain("claude")
+      expect(zellij.title).toBe("the zellij plugin")
+    })
+  )
+
+  it("sends the message on stdin and reads with the number of lines", () => {
+    expect(zellij.steps({ id: "main/1", machine: null }, "a\nb")).toEqual([
+      { command: "/p/zellij-host", args: ["--quiet", "send", "main/1"], stdin: "a\nb" }
+    ])
+    expect(zellij.screen({ id: "main/1", machine: null }, 40)).toEqual({
+      command: "/p/zellij-host",
+      args: ["--quiet", "read", "main/1", "40"]
+    })
   })
 })

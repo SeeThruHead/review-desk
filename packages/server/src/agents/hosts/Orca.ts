@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { type Found, type TerminalHost, decodeJson } from "../Host.ts"
+import { type Found, commandHost, decodeJson } from "../Host.ts"
 
 export const OrcaTerminals = Schema.Struct({
   result: Schema.Struct({
@@ -29,16 +29,16 @@ export const orcaAgents = (terminals: ReadonlyArray<OrcaTerminal>): ReadonlyArra
     .filter(runsAgent)
     .map((terminal) => ({ pane: `orca:${terminal.handle}`, cwd: terminal.worktreePath, status: "unknown" }))
 
-export const orca: TerminalHost = {
-  kind: "orca",
+export const orca = commandHost({
+  name: "orca",
   title: "Orca",
-  list: (run) =>
+  list: ({ run }) =>
     run({ command: "orca", args: ["terminal", "list", "--json"] }).pipe(
       decodeJson(OrcaTerminals),
       Effect.map(({ result }) => orcaAgents(result.terminals))
     ),
-  send: (id, _machine, text) => [
+  steps: ({ id }, text) => [
     { command: "orca", args: ["terminal", "send", "--terminal", id, "--text", text, "--enter"] }
   ],
-  read: (id) => ({ command: "orca", args: ["terminal", "read", "--terminal", id, "--screen"] })
-}
+  screen: ({ id }) => ({ command: "orca", args: ["terminal", "read", "--terminal", id, "--screen"] })
+})

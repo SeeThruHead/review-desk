@@ -8,7 +8,7 @@ import { FetchHttpClient } from "effect/http"
 import { RpcClient, RpcSerialization } from "effect/rpc"
 import { callerAddress } from "./agents/Address.ts"
 import { Agents } from "./agents/Agents.ts"
-import { ClaudeSession } from "./agents/Claude.ts"
+import { ClaudeSession } from "./agents/hosts/Claude.ts"
 import { DeskConfig } from "./config/DeskConfig.ts"
 import { Desk } from "./desk/Desk.ts"
 import { ForgesLive } from "./forge/Forges.ts"
@@ -334,7 +334,7 @@ const messageOf = (cause: Cause.Cause<unknown>): string =>
   })
 
 cli.pipe(
-  Command.run({ version: "0.3.0" }),
+  Command.run({ version: "0.4.0" }),
   Effect.tapCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Console.error(messageOf(cause)))),
   Effect.provide(BunServices.layer),
   BunRuntime.runMain

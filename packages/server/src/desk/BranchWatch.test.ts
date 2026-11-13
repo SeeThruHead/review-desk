@@ -18,6 +18,7 @@ const host = "gitea.example"
 const agent = (name: string, remote: string, branch: string): LiveAgent => ({
   name: SessionName.make(name),
   machine: name === "infra-2" ? "devbox" : null,
+  host: "herdr",
   pane: `w1:${name}`,
   cwd: `/work/${name}`,
   status: "idle",

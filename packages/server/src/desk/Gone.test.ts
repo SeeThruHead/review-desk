@@ -1,10 +1,12 @@
 import { describe, expect, it } from "@effect/vitest"
+import { shippedHostNames } from "../agents/Address.ts"
 import { type Holder, type Roster, absences, placeOf, sightingOf, unknownRoster } from "./Gone.ts"
 
 const roster = (fields: Partial<Roster>): Roster => ({
   agents: [{ name: "auth", machine: null, pane: "w1:p1" }],
   reached: [placeOf(null, "herdr"), placeOf("STHDEV", "herdr")],
   complete: true,
+  prefixes: shippedHostNames,
   ...fields
 })
 

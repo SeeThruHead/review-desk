@@ -1,5 +1,4 @@
 import { Effect, Schema } from "effect"
-import type { TerminalKind } from "./Address.ts"
 
 export type Status = "idle" | "working" | "blocked" | "unknown"
 
@@ -10,19 +9,57 @@ export type Found = {
   readonly name?: string
 }
 
-export type Step = { readonly command: string; readonly args: ReadonlyArray<string>; readonly stdin?: string }
+export type Step = {
+  readonly command: string
+  readonly args: ReadonlyArray<string>
+  readonly stdin?: string
+  readonly env?: Readonly<Record<string, string>>
+}
 
 export type Failure = { readonly message: string }
 
 export type Run = (step: Step) => Effect.Effect<string, Failure>
 
-export type TerminalHost = {
-  readonly kind: TerminalKind
-  readonly title: string
-  readonly list: (run: Run, agentPrograms: ReadonlySet<string>) => Effect.Effect<ReadonlyArray<Found>, Failure>
-  readonly send: (id: string, machine: string | null, text: string) => ReadonlyArray<Step>
-  readonly read: (id: string, machine: string | null, lines: number) => Step
+export type Files = {
+  readonly readText: (path: string) => Effect.Effect<string, Failure>
+  readonly list: (directory: string) => Effect.Effect<ReadonlyArray<string>, Failure>
+  readonly exists: (path: string) => Effect.Effect<boolean>
 }
+
+export type HostEnv = {
+  readonly run: Run
+  readonly files: Files
+  readonly postLine: (socket: string, line: string) => Effect.Effect<void, Failure>
+  readonly agentPrograms: ReadonlySet<string>
+}
+
+export type Target = { readonly id: string; readonly machine: string | null }
+
+export type AgentHost = {
+  readonly name: string
+  readonly title: string
+  readonly yieldsToTerminals: boolean
+  readonly list: (env: HostEnv) => Effect.Effect<ReadonlyArray<Found>, Failure>
+  readonly send: (env: HostEnv, target: Target, text: string) => Effect.Effect<void, Failure>
+  readonly read: (env: HostEnv, target: Target, lines: number) => Effect.Effect<string, Failure>
+}
+
+export type CommandHost = {
+  readonly name: string
+  readonly title: string
+  readonly list: (env: HostEnv) => Effect.Effect<ReadonlyArray<Found>, Failure>
+  readonly steps: (target: Target, text: string) => ReadonlyArray<Step>
+  readonly screen: (target: Target, lines: number) => Step
+}
+
+export const lastLines = (text: string, lines: number): string => text.trimEnd().split("\n").slice(-lines).join("\n")
+
+export const commandHost = (host: CommandHost): AgentHost & CommandHost => ({
+  ...host,
+  yieldsToTerminals: false,
+  send: (env, target, text) => Effect.forEach(host.steps(target, text), env.run, { discard: true }),
+  read: (env, target, lines) => Effect.map(env.run(host.screen(target, lines)), (text) => lastLines(text, lines))
+})
 
 export const knownAgentPrograms = ["claude", "codex", "opencode", "gemini", "pi", "amp", "aider", "cursor-agent"]
 
@@ -41,8 +78,6 @@ export const decodeJson =
   <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>
   <E>(text: Effect.Effect<string, E>) =>
     Effect.flatMap(text, Schema.decodeUnknownEffect(Schema.fromJsonString(schema)))
-
-export const lastLines = (text: string, lines: number): string => text.trimEnd().split("\n").slice(-lines).join("\n")
 
 const pasteStart = "\u001b[200~"
 const pasteEnd = "\u001b[201~"

@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { type Found, type Run, type TerminalHost, decodeJson, statusOf } from "../Host.ts"
+import { type Found, type Run, commandHost, decodeJson, statusOf } from "../Host.ts"
 
 export const HerdrAgent = Schema.Struct({
   agent: Schema.String,
@@ -26,13 +26,13 @@ export const herdrAgents = (run: Run, machine: string | null) =>
     Effect.map(({ result }) => result.agents)
   )
 
-export const herdr: TerminalHost = {
-  kind: "herdr",
+export const herdr = commandHost({
+  name: "herdr",
   title: "the Herdr TUI",
-  list: (run) => herdrAgents(run, null).pipe(Effect.map((agents) => agents.map(herdrFound))),
-  send: (id, machine, text) => [{ command: "herdr", args: [...on(machine), "agent", "prompt", id, text] }],
-  read: (id, machine, lines) => ({
+  list: ({ run }) => herdrAgents(run, null).pipe(Effect.map((agents) => agents.map(herdrFound))),
+  steps: ({ id, machine }, text) => [{ command: "herdr", args: [...on(machine), "agent", "prompt", id, text] }],
+  screen: ({ id, machine }, lines) => ({
     command: "herdr",
     args: [...on(machine), "agent", "read", id, "--lines", String(lines)]
   })
-}
+})

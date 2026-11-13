@@ -38,6 +38,7 @@ const empty: Records = {
 const agent = (name: string, branch: string, working = false): LiveAgent => ({
   name: SessionName.make(name),
   machine: null,
+  host: "herdr",
   pane: `w1:${name}`,
   cwd: `/work/${name}`,
   status: working ? "working" : "idle",

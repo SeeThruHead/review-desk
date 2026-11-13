@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect"
-import { type Found, type Run, type Status, type TerminalHost, bufferName, lastLines } from "../Host.ts"
+import { type Found, type Run, type Status, commandHost, bufferName, lastLines } from "../Host.ts"
 
 export const tmuxFormat = "#{pane_id}\t#{pane_current_path}\t#{pane_current_command}"
 
@@ -40,19 +40,19 @@ const statusOfPane = (run: Run, pane: Pane) =>
 const foundOf = (run: Run, pane: Pane) =>
   Effect.map(statusOfPane(run, pane), (status): Found => ({ pane: `tmux:${pane.id}`, cwd: pane.cwd, status }))
 
-export const tmux: TerminalHost = {
-  kind: "tmux",
+export const tmux = commandHost({
+  name: "tmux",
   title: "tmux",
-  list: (run, agentPrograms) =>
+  list: ({ run, agentPrograms }) =>
     run({ command: "tmux", args: ["list-panes", "-a", "-F", tmuxFormat] }).pipe(
       Effect.flatMap((text) =>
         Effect.forEach(tmuxPanes(text, agentPrograms), (pane) => foundOf(run, pane), { concurrency: 4 })
       )
     ),
-  send: (id, _machine, text) => [
+  steps: ({ id }, text) => [
     { command: "tmux", args: ["load-buffer", "-b", bufferName(id), "-"], stdin: text },
     { command: "tmux", args: ["paste-buffer", "-p", "-d", "-b", bufferName(id), "-t", id] },
     { command: "tmux", args: ["send-keys", "-t", id, "Enter"] }
   ],
-  read: (id, _machine, lines) => ({ command: "tmux", args: ["capture-pane", "-p", "-t", id, "-S", `-${lines}`] })
-}
+  screen: ({ id }, lines) => ({ command: "tmux", args: ["capture-pane", "-p", "-t", id, "-S", `-${lines}`] })
+})

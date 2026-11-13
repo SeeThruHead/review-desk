@@ -8,9 +8,10 @@ export type Roster = {
   readonly agents: ReadonlyArray<Seen>
   readonly reached: ReadonlyArray<string>
   readonly complete: boolean
+  readonly prefixes: ReadonlyArray<string>
 }
 
-export const unknownRoster: Roster = { agents: [], reached: [], complete: false }
+export const unknownRoster: Roster = { agents: [], reached: [], complete: false, prefixes: [] }
 
 export type Holder =
   | { readonly _tag: "Session"; readonly key: string; readonly session: string }
@@ -27,7 +28,7 @@ const sessionSighting = (session: string, roster: Roster): Sighting => {
 const paneSighting = (machine: string | null, pane: string, roster: Roster): Sighting => {
   if (roster.agents.some((agent) => agent.machine === machine && agent.pane === pane)) return "present"
 
-  return roster.reached.includes(placeOf(machine, parseAddress(pane).host)) ? "gone" : "unknown"
+  return roster.reached.includes(placeOf(machine, parseAddress(pane, roster.prefixes).host)) ? "gone" : "unknown"
 }
 
 export const sightingOf = (holder: Holder, roster: Roster): Sighting =>

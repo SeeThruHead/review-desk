@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { type Found, type TerminalHost, decodeJson, statusOf } from "../Host.ts"
+import { type Found, commandHost, decodeJson, statusOf } from "../Host.ts"
 
 export const AppTerminal = Schema.Struct({
   address: Schema.String,
@@ -45,14 +45,14 @@ export const appAgents = (
   machine: string | null = null
 ): ReadonlyArray<Found> => terminals.flatMap(appAgent(machine))
 
-export const herdrApp: TerminalHost = {
-  kind: "hc",
+export const herdrApp = commandHost({
+  name: "hc",
   title: "the Herdr app",
-  list: (run) =>
+  list: ({ run }) =>
     run({ command: "hc", args: ["ls", "--json"] }).pipe(
       decodeJson(AppTerminals),
       Effect.map(({ terminals }) => appAgents(terminals))
     ),
-  send: (id, _machine, text) => [{ command: "hc", args: ["send", id, text] }],
-  read: (id, _machine, lines) => ({ command: "hc", args: ["read", id, "--lines", String(lines)] })
-}
+  steps: ({ id }, text) => [{ command: "hc", args: ["send", id, text] }],
+  screen: ({ id }, lines) => ({ command: "hc", args: ["read", id, "--lines", String(lines)] })
+})

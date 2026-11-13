@@ -1,5 +1,7 @@
 import type { Board, Role } from "@review-desk/contract/Board.ts"
 import {
+  type AgentListing,
+  AgentUnreadable,
   type CommentRequest,
   type IssueClaimRequest,
   DeliveryFailed,
@@ -43,6 +45,7 @@ import {
   Stream,
   SubscriptionRef
 } from "effect"
+import { parseAddress } from "../agents/Address.ts"
 import { Agents, type LiveAgent, type Roster } from "../agents/Agents.ts"
 import { type AgentTarget, targetFor } from "../agents/Remote.ts"
 import { DeskConfig } from "../config/DeskConfig.ts"
@@ -149,6 +152,8 @@ export class Desk extends Context.Service<
     ) => Effect.Effect<{ readonly forges: ReadonlyArray<Forge> }, NotConfigured>
     readonly releaseIssues: (repo: RepoSlug, target: AgentTarget) => Effect.Effect<{ readonly released: Count }>
     readonly markSeen: (key: PrKey) => Effect.Effect<void, UnknownPull>
+    readonly listAgents: Effect.Effect<AgentListing>
+    readonly readAgent: (agent: string, lines: number) => Effect.Effect<{ readonly text: string }, AgentUnreadable>
   }
 >()("review-desk/server/Desk") {
   static readonly layer = Layer.effect(
@@ -637,6 +642,31 @@ export class Desk extends Context.Service<
 
       const board = Stream.concat(Stream.fromEffect(SubscriptionRef.get(boardRef)), SubscriptionRef.changes(boardRef))
 
+      const listAgents = Effect.map(roster, (found): AgentListing => ({
+        agents: found.agents.map((agent) => ({
+          name: agent.name,
+          machine: agent.machine,
+          host: parseAddress(agent.pane).host,
+          pane: agent.pane,
+          cwd: agent.cwd,
+          status: agent.status
+        })),
+        reached: found.reached
+      }))
+
+      const readAgent = Effect.fn("Desk.readAgent")(function* (agent: string, lines: number) {
+        const live = yield* liveAgents
+        const text = yield* agents
+          .read(targetFor(agent, live), lines)
+          .pipe(
+            Effect.mapError(
+              (error) => new AgentUnreadable({ agent: Text.make(agent), reason: Text.make(error.reason) })
+            )
+          )
+
+        return { text }
+      })
+
       return Desk.of({
         board,
         summary: board.pipe(Stream.map(summaryOf), Stream.changesWith(sameSummary)),
@@ -647,7 +677,9 @@ export class Desk extends Context.Service<
         openInSidediff,
         claimIssues,
         releaseIssues,
-        markSeen
+        markSeen,
+        listAgents,
+        readAgent
       })
     })
   )

@@ -18,8 +18,10 @@ export default defineConfig({
         "src/desk/Repos.ts",
         "src/agents/Remote.ts",
         "src/agents/Address.ts",
-        "src/agents/Terminals.ts",
-        "src/agents/Delivery.ts",
+        "src/agents/Host.ts",
+        "src/agents/Hosts.ts",
+        "src/agents/Claude.ts",
+        "src/agents/hosts/*.ts",
         "src/store/DeskRepo.ts",
         "src/desk/Health.ts",
         "src/desk/Gone.ts"

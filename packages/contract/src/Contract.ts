@@ -56,6 +56,30 @@ export class PostFailed extends Schema.TaggedError<PostFailed, { readonly brand:
   }
 }
 
+export class AgentUnreadable extends Schema.TaggedError<AgentUnreadable, { readonly brand: unique symbol }>()(
+  "AgentUnreadable",
+  { agent: Text, reason: Text }
+) {
+  override get message() {
+    return `could not read ${this.agent}'s terminal: ${this.reason}`
+  }
+}
+
+export const AgentStatus = Schema.Literals(["idle", "working", "blocked", "unknown"])
+
+export const AgentRow = Schema.Struct({
+  name: SessionName,
+  machine: Schema.NullOr(Schema.String),
+  host: Schema.String,
+  pane: Schema.String,
+  cwd: Schema.String,
+  status: AgentStatus
+})
+export type AgentRow = typeof AgentRow.Type
+
+export const AgentListing = Schema.Struct({ agents: Schema.Array(AgentRow), reached: Schema.Array(Schema.String) })
+export type AgentListing = typeof AgentListing.Type
+
 export const CommentOutcome = Schema.Literals(["open", "fixed", "answered", "dropped"])
 
 export const CommentRequest = Schema.Struct({
@@ -132,5 +156,11 @@ export const DeskRpcs = RpcGroup.make(
   Rpc.make("ReleaseIssues", {
     payload: { repo: RepoSlug, machine: Schema.NullOr(Schema.String), pane: Schema.String },
     success: Schema.Struct({ released: Count })
+  }),
+  Rpc.make("ListAgents", { success: AgentListing }),
+  Rpc.make("ReadAgent", {
+    payload: { agent: Schema.String, lines: Schema.Int },
+    success: Schema.Struct({ text: Schema.String }),
+    error: AgentUnreadable
   })
 )

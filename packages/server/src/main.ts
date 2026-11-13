@@ -1,5 +1,5 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun"
-import { CommentOutcome, DeskRpcs, Summary } from "@review-desk/contract/Contract.ts"
+import { type AgentRow, CommentOutcome, DeskRpcs, Summary } from "@review-desk/contract/Contract.ts"
 import { Role, Verdict } from "@review-desk/contract/Board.ts"
 import { Login, PrKey, RepoSlug, SessionName, Text } from "@review-desk/contract/Ids.ts"
 import { Cause, Config, Console, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
@@ -8,7 +8,7 @@ import { FetchHttpClient } from "effect/http"
 import { RpcClient, RpcSerialization } from "effect/rpc"
 import { callerAddress } from "./agents/Address.ts"
 import { Agents } from "./agents/Agents.ts"
-import { ClaudeSession } from "./agents/Terminals.ts"
+import { ClaudeSession } from "./agents/Claude.ts"
 import { DeskConfig } from "./config/DeskConfig.ts"
 import { Desk } from "./desk/Desk.ts"
 import { ForgesLive } from "./forge/Forges.ts"
@@ -131,12 +131,15 @@ const callerTerminal = Effect.gen(function* () {
     onNone: () => Effect.succeed(Option.none<string>()),
     onSome: claudeSessionOf
   })
+  const rexSession = yield* envOption("REX_SESSION")
+  const rexBlock = yield* envOption("REX_BLOCK")
 
   return callerAddress({
     herdrPane: yield* envOption("HERDR_PANE_ID"),
     appTerminal: yield* envOption("HC_TERMINAL_ID"),
     cmuxWorkspace: yield* envOption("CMUX_WORKSPACE_ID"),
     orcaTerminal: yield* envOption("ORCA_TERMINAL_HANDLE"),
+    rexBlock: Option.zipWith(rexSession, rexBlock, (session, block) => ({ session, block })),
     tmuxPane: yield* envOption("TMUX_PANE"),
     claudeSession
   })
@@ -223,7 +226,7 @@ const claim = Command.make(
     ),
     pane: Flag.String("pane").pipe(
       Flag.withDescription(
-        "Terminal to deliver to: a Herdr pane, or hc:<t>, cmux:<id>, orca:<id>, tmux:<pane>, claude:<session> (default: this terminal)"
+        "Terminal to deliver to: a Herdr pane, or hc:<t>, cmux:<id>, orca:<id>, rex:<session>/<block>, tmux:<pane>, claude:<session> (default: this terminal)"
       ),
       Flag.optional
     ),
@@ -273,6 +276,41 @@ const seen = Command.make(
   })
 ).pipe(Command.withDescription("Clear a pull request or issue from Needs you without replying"))
 
+const agentLine = (agent: AgentRow): string =>
+  [agent.name, agent.host, agent.status, agent.machine ?? "here", agent.pane, agent.cwd].join("\t")
+
+const listAgents = withDesk((client) => client.ListAgents()).pipe(
+  Effect.flatMap((listing) =>
+    Console.log(
+      [
+        ...listing.agents.map(agentLine),
+        `${listing.agents.length} agents; hosts that answered: ${listing.reached.join(", ") || "none"}`
+      ].join("\n")
+    )
+  )
+)
+
+const agents = Command.make(
+  "agents",
+  {
+    read: Flag.String("read").pipe(
+      Flag.withDescription("Print the recent screen of this agent, by name or terminal address"),
+      Flag.optional
+    ),
+    lines: Flag.Int("lines").pipe(Flag.withDescription("How many lines --read prints"), Flag.withDefault(40))
+  },
+  Effect.fn(function* (input) {
+    const agent = Option.getOrNull(input.read)
+    if (agent === null) return yield* listAgents
+    const screen = yield* withDesk((client) => client.ReadAgent({ agent, lines: input.lines }))
+    yield* Console.log(screen.text)
+  })
+).pipe(
+  Command.withDescription(
+    "List the agents the desk can hand work to, in every terminal host (name, host, status, machine, address, folder)"
+  )
+)
+
 const SummaryJson = Schema.fromJsonString(Summary)
 
 const summary = Command.make("summary", {}, () =>
@@ -286,7 +324,7 @@ const summary = Command.make("summary", {}, () =>
 
 const cli = Command.make("review-desk").pipe(
   Command.withDescription("Agents do the first review rounds; you get a queue of what needs a person"),
-  Command.withSubcommands([serve, comment, triage, claim, seen, sketchybar, summary])
+  Command.withSubcommands([serve, comment, triage, claim, seen, agents, sketchybar, summary])
 )
 
 const messageOf = (cause: Cause.Cause<unknown>): string =>
@@ -296,7 +334,7 @@ const messageOf = (cause: Cause.Cause<unknown>): string =>
   })
 
 cli.pipe(
-  Command.run({ version: "0.2.3" }),
+  Command.run({ version: "0.3.0" }),
   Effect.tapCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Console.error(messageOf(cause)))),
   Effect.provide(BunServices.layer),
   BunRuntime.runMain

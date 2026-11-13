@@ -20,6 +20,7 @@ const agent = (name: string, remote: string, branch: string): LiveAgent => ({
   machine: name === "infra-2" ? "devbox" : null,
   pane: `w1:${name}`,
   cwd: `/work/${name}`,
+  status: "idle",
   working: false,
   branch: Option.some(branch),
   remote: Option.some(remote)

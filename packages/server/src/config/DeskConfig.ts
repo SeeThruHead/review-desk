@@ -1,5 +1,6 @@
 import { Forge, Login, RepoSlug, SessionName } from "@review-desk/contract/Ids.ts"
 import { Config, Context, Effect, FileSystem, Layer, Schema } from "effect"
+import { allHostKinds } from "../agents/Address.ts"
 import { outsideOwners } from "../desk/Repos.ts"
 
 export const RepoRef = Schema.Struct({ forge: Forge, slug: RepoSlug })
@@ -14,6 +15,8 @@ export const Area = Schema.Struct({
 export type Area = typeof Area.Type
 
 export const Role = Schema.Literals(["author", "reviewer"])
+
+export const AgentHostKind = Schema.Literals(allHostKinds)
 
 export const DeskSettings = Schema.Struct({
   desk: Login,
@@ -38,7 +41,9 @@ export const DeskSettings = Schema.Struct({
   ),
   machines: Schema.optionalKey(Schema.Array(Schema.Struct({ label: Schema.String, seat: Schema.String }))),
   owners: Schema.optionalKey(Schema.Array(Schema.String)),
-  claimGraceMinutes: Schema.optionalKey(Schema.Int)
+  claimGraceMinutes: Schema.optionalKey(Schema.Int),
+  hosts: Schema.optionalKey(Schema.Array(AgentHostKind)),
+  agentCommands: Schema.optionalKey(Schema.Array(Schema.String))
 })
 export type DeskSettings = typeof DeskSettings.Type
 

@@ -1,8 +1,12 @@
 import { Option } from "effect"
 
-export const hostKinds = ["hc", "cmux", "orca", "tmux", "claude"] as const
+export const hostKinds = ["hc", "cmux", "orca", "rex", "tmux", "claude"] as const
+
+export const allHostKinds = ["herdr", ...hostKinds] as const
 
 export type HostKind = "herdr" | (typeof hostKinds)[number]
+
+export type TerminalKind = Exclude<HostKind, "claude">
 
 export type Address = { readonly host: HostKind; readonly id: string }
 
@@ -22,6 +26,7 @@ export type CallerEnv = {
   readonly appTerminal: Option.Option<string>
   readonly cmuxWorkspace: Option.Option<string>
   readonly orcaTerminal: Option.Option<string>
+  readonly rexBlock: Option.Option<{ readonly session: string; readonly block: string }>
   readonly tmuxPane: Option.Option<string>
   readonly claudeSession: Option.Option<string>
 }
@@ -32,6 +37,7 @@ export const callerAddress = (env: CallerEnv): Option.Option<string> =>
     Option.map(env.appTerminal, (id) => `hc:${id}`),
     Option.map(env.cmuxWorkspace, (id) => `cmux:${id}`),
     Option.map(env.orcaTerminal, (id) => `orca:${id}`),
+    Option.map(env.rexBlock, ({ session, block }) => `rex:${session}/${block}`),
     Option.map(env.tmuxPane, (id) => `tmux:${id}`),
     Option.map(env.claudeSession, (id) => `claude:${id}`)
   ])

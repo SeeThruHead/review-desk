@@ -17,7 +17,7 @@ sth-ui is the one package `@seethruhead/sth-ui` from npm (source github.com/SeeT
 
 ## How it starts
 
-`packages/server/src/main.ts` is the only entry point and the only `Effect.run*` (through `BunRuntime.runMain`). `review-desk serve` builds the layers: config, Shell, the GitHub and Gitea readers, Herdr agents, SQLite records, the Desk service and the HTTP server. The other subcommands (`comment`, `triage`, `claim`, `summary`, `sketchybar`) are RPC clients of a running desk at `REVIEW_DESK_URL`.
+`packages/server/src/main.ts` is the only entry point and the only `Effect.run*` (through `BunRuntime.runMain`). `review-desk serve` builds the layers: config, Shell, the GitHub and Gitea readers, the agents in every terminal host, SQLite records, the Desk service and the HTTP server. The other subcommands (`comment`, `triage`, `claim`, `seen`, `agents`, `summary`, `sketchybar`) are RPC clients of a running desk at `REVIEW_DESK_URL`.
 
 The web page starts in `packages/web/src/main.ts`; the board page lives in `src/pages/board` (model, messages, update, commands, subscriptions, view).
 
@@ -35,7 +35,7 @@ The web page starts in `packages/web/src/main.ts`; the board page lives in `src/
 ## What reviewers check instead
 
 - Pure modules stay pure: `domain/*`, `server/src/desk/Plan.ts` and `Messages.ts` take values and return values. I/O happens in `Desk.ts`, the forge readers, `Agents.ts`, `DeskRepo.ts` and `Shell.ts`.
-- Every input from outside is decoded with Schema at the edge: forge responses, Herdr output, the config file, CLI flags.
+- Every input from outside is decoded with Schema at the edge: forge responses, terminal host output, the config file, CLI flags.
 - Nothing from an untrusted repository or person can reach an agent. A change to `Plan.ts` keeps the trust tests passing and adds one for any new path to an agent.
 - The comment marker and the RPC contract only grow: never rename or remove a field, a procedure or a marker key; old markers must keep parsing.
 - Components are composable (`Name(h, props)`, children over long prop lists) and every component and page state has a story with a play test that finds things by role and name.

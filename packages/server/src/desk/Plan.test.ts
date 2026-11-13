@@ -40,6 +40,7 @@ const agent = (name: string, branch: string, working = false): LiveAgent => ({
   machine: null,
   pane: `w1:${name}`,
   cwd: `/work/${name}`,
+  status: working ? "working" : "idle",
   working,
   branch: Option.some(branch),
   remote: Option.some("git@github.com:acme/api.git")

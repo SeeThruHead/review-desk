@@ -15,7 +15,9 @@ export const Handlers = DeskRpcs.toLayer(
       Claim: ({ key, session, role }) => desk.claim(key, session, role ?? "reviewer"),
       ClaimIssues: (request) => desk.claimIssues(request),
       ReleaseIssues: ({ repo, machine, pane }) => desk.releaseIssues(repo, { machine, pane }),
-      MarkSeen: ({ key }) => desk.markSeen(key)
+      MarkSeen: ({ key }) => desk.markSeen(key),
+      ListAgents: () => desk.listAgents,
+      ReadAgent: ({ agent, lines }) => desk.readAgent(agent, lines)
     })
   })
 )

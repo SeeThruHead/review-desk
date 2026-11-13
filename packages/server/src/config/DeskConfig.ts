@@ -1,17 +1,26 @@
 import { Forge, Login, RepoSlug, SessionName } from "@review-desk/contract/Ids.ts"
 import { Config, Context, Effect, FileSystem, Layer, Schema } from "effect"
+import { agentAddressPattern } from "../agents/Directory.ts"
 import { outsideOwners } from "../desk/Repos.ts"
 
 export const RepoRef = Schema.Struct({ forge: Forge, slug: RepoSlug })
 export type RepoRef = typeof RepoRef.Type
 
-export const Area = Schema.Struct({
+export const AgentAddress = Schema.String.pipe(Schema.check(Schema.isPattern(agentAddressPattern)))
+
+const areaFields = {
   name: Schema.String,
-  session: SessionName,
   repos: Schema.Array(RepoSlug),
   paths: Schema.optionalKey(Schema.Array(Schema.String))
-})
+}
+
+export const Area = Schema.Union([
+  Schema.Struct({ ...areaFields, agent: AgentAddress }),
+  Schema.Struct({ ...areaFields, session: SessionName })
+])
 export type Area = typeof Area.Type
+
+export const areaAgent = (area: Area): string => ("agent" in area ? area.agent : area.session)
 
 export const Role = Schema.Literals(["author", "reviewer"])
 

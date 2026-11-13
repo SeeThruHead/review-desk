@@ -26,6 +26,7 @@ const lookAt = (facts: PullFacts, overrides: Partial<Look> = {}, card: Partial<C
   me,
   asked: false,
   covered: false,
+  unrouted: null,
   leftQueue: false,
   ...overrides
 })
@@ -253,6 +254,15 @@ describe("what on a pull request he reviews needs him", () => {
     expect(why(reviewer(theirs(), { asked: true }, { stage: "requested", claimed: true }))).toBeNull()
     expect(why(reviewer(theirs(), { asked: true }, { stage: "reviewing" }))).toBeNull()
     expect(why(reviewer(theirs(), {}, { stage: "requested" }))).toBeNull()
+  })
+
+  it("says why a covered request was not sent to its agent", () => {
+    const refused = reviewer(
+      theirs(),
+      { asked: true, covered: true, unrouted: "2 agents are called auth" },
+      { stage: "requested" }
+    )
+    expect(why(refused)).toBe("Review requested of you; not sent to an agent: 2 agents are called auth")
   })
 })
 

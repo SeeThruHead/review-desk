@@ -84,6 +84,7 @@ export type Look = {
   readonly me: Me
   readonly asked: boolean
   readonly covered: boolean
+  readonly unrouted: string | null
   readonly leftQueue: boolean
 }
 
@@ -121,8 +122,11 @@ const reviewerNeed = (look: Look): Attention | null => {
   if (forYouThread(card)) return attention("A thread used all its agent rounds; it is yours now", facts.updatedAt)
   const fixed = answeredByCommit(look)
   if (fixed !== null) return fixed
-  if (!look.asked || card.claimed || look.covered) return null
+  if (!look.asked || card.claimed) return null
   if (card.stage !== "requested" && card.stage !== "waiting") return null
+  if (look.unrouted !== null)
+    return attention(`Review requested of you; not sent to an agent: ${look.unrouted}`, facts.updatedAt)
+  if (look.covered) return null
 
   return attention("Review requested of you; no agent area covers it", facts.updatedAt)
 }

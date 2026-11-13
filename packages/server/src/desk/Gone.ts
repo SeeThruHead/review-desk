@@ -1,4 +1,5 @@
 import { parseAddress } from "../agents/Address.ts"
+import { type Refusals, isAgentAddress } from "../agents/Directory.ts"
 
 export const placeOf = (machine: string | null, host: string): string => `${machine ?? "local"}/${host}`
 
@@ -9,9 +10,10 @@ export type Roster = {
   readonly reached: ReadonlyArray<string>
   readonly complete: boolean
   readonly prefixes: ReadonlyArray<string>
+  readonly refused: Refusals
 }
 
-export const unknownRoster: Roster = { agents: [], reached: [], complete: false, prefixes: [] }
+export const unknownRoster: Roster = { agents: [], reached: [], complete: false, prefixes: [], refused: new Map() }
 
 export type Holder =
   | { readonly _tag: "Session"; readonly key: string; readonly session: string }
@@ -19,8 +21,16 @@ export type Holder =
 
 export type Sighting = "present" | "gone" | "unknown"
 
+const addressSighting = (address: string, roster: Roster): Sighting => {
+  const tag = roster.refused.get(address)?.tag
+  if (tag === "NotFound" || tag === "Ended") return "gone"
+
+  return "unknown"
+}
+
 const sessionSighting = (session: string, roster: Roster): Sighting => {
   if (roster.agents.some((agent) => agent.name === session || agent.pane === session)) return "present"
+  if (isAgentAddress(session)) return addressSighting(session, roster)
 
   return roster.complete ? "gone" : "unknown"
 }

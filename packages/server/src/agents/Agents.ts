@@ -5,6 +5,7 @@ import { DeskConfig } from "../config/DeskConfig.ts"
 import { Shell } from "../platform/Shell.ts"
 import { type Roster as Sightings, placeOf } from "../desk/Gone.ts"
 import { parseAddress } from "./Address.ts"
+import { type Directed, addressesIn, directed, unavailable } from "./Directory.ts"
 import {
   type AgentHost,
   type Failure,
@@ -20,6 +21,7 @@ import { enabledHosts, prefixesOf, shippedHosts, yieldToTerminals } from "./Host
 import { type PluginSpec, executableHost, pluginFile, usablePlugins } from "./hosts/Executable.ts"
 import { herdrAgents, herdrFound } from "./hosts/Herdr.ts"
 import { AppMachines, AppTerminals, appAgents, connectedMachines } from "./hosts/HerdrApp.ts"
+import { reach, reachDirectory, reachFound } from "./hosts/Reach.ts"
 import { type AgentTarget, type Location, locateScript, parseLocations } from "./Remote.ts"
 
 export type LiveAgent = {
@@ -103,7 +105,7 @@ export class Agents extends Context.Service<
   Agents,
   {
     readonly list: Effect.Effect<ReadonlyArray<LiveAgent>, AgentsUnavailable>
-    readonly roster: Effect.Effect<Roster, AgentsUnavailable>
+    readonly roster: (wanted: Iterable<string>) => Effect.Effect<Roster, AgentsUnavailable>
     readonly prompt: (target: AgentTarget, text: string) => Effect.Effect<void, PromptFailed>
     readonly read: (target: AgentTarget, lines: number) => Effect.Effect<string, ReadFailed>
   }
@@ -143,8 +145,9 @@ export class Agents extends Context.Service<
       )
       yield* Effect.forEach(plugins.usable, (one) => Effect.logInfo(`loaded the ${one.name} host plugin`))
 
-      const everyHost = [...shippedHosts(path.join(claudeHome, "sessions")), ...plugins.usable.map(executableHost)]
-      const askedHosts = enabledHosts(everyHost, config.hosts)
+      const listingHosts = [...shippedHosts(path.join(claudeHome, "sessions")), ...plugins.usable.map(executableHost)]
+      const everyHost = [...listingHosts, reach]
+      const askedHosts = enabledHosts(listingHosts, config.hosts)
       const prefixes = prefixesOf(everyHost)
       const hostOf = (pane: string) => parseAddress(pane, prefixes).host
 
@@ -235,21 +238,38 @@ export class Agents extends Context.Service<
           )
         : Effect.succeed({ listed: true, heard: [] })
 
-      const roster = Effect.all([here, elsewhere, appElsewhere], { concurrency: 3 }).pipe(
-        Effect.map(([local, remote, inApps]): Roster => {
-          const heard = [...remote, ...inApps.heard]
+      const addressed = (wanted: Iterable<string>) => {
+        const addresses = addressesIn(wanted)
+        if (addresses.length === 0) return Effect.succeed<Directed>(directed([], []))
 
-          return {
-            agents: [...local.agents, ...heard.flatMap((one) => one.agents ?? [])],
-            reached: [...local.reached, ...heard.flatMap((one) => (one.agents === null ? [] : [one.place]))],
-            complete: inApps.listed && heard.every((one) => one.agents !== null),
-            prefixes
-          }
-        }),
-        Effect.withSpan("Agents.roster")
-      )
+        return reachDirectory(run).pipe(
+          Effect.map(({ agents }) => directed(addresses, agents)),
+          Effect.tapError((error) => Effect.logWarning(`reach did not answer: ${error.message}`)),
+          Effect.orElseSucceed(() => unavailable(addresses, "reach is not installed or did not answer"))
+        )
+      }
 
-      const list = Effect.map(roster, (found) => found.agents)
+      const roster = (wanted: Iterable<string>) =>
+        Effect.all([here, elsewhere, appElsewhere, addressed(wanted)], { concurrency: 4 }).pipe(
+          Effect.map(([local, remote, inApps, byAddress]): Roster => {
+            const heard = [...remote, ...inApps.heard]
+
+            return {
+              agents: [
+                ...local.agents,
+                ...heard.flatMap((one) => one.agents ?? []),
+                ...byAddress.found.map((agent) => shape(reachFound(agent), "reach", null, nowhere))
+              ],
+              reached: [...local.reached, ...heard.flatMap((one) => (one.agents === null ? [] : [one.place]))],
+              complete: inApps.listed && heard.every((one) => one.agents !== null),
+              prefixes,
+              refused: byAddress.refused
+            }
+          }),
+          Effect.withSpan("Agents.roster")
+        )
+
+      const list = Effect.map(roster([]), (found) => found.agents)
 
       const hostFor = (target: AgentTarget) => {
         const address = parseAddress(target.pane, prefixes)

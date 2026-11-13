@@ -45,6 +45,10 @@ Herdr is optional. Every terminal host below is built in and on by default: each
 
 Any other host can be added without changing the desk: drop an executable that answers `list`, `send` and `read` into `~/.review-desk/plugins/`. [docs/host-plugins.md](docs/host-plugins.md) has the contract and a working example; the hosts above are built on the same contract.
 
+### Agent addresses
+
+When [reach](https://github.com/SeeThruHead/reach) is installed, an area, `claim --session` and `agents --read` can name an agent by its address, `machine/space/name`, which stays the same when its terminal is replaced or renamed. The desk looks addresses up with `reach ls` each poll and hands messages over with `reach send`, which wakes an agent that is asleep. An address that is missing, ended or shared by two agents is refused, never swapped for a near match. Without reach, or for agents without a pinned address, names and terminal addresses work as before, except that a name two agents share is refused rather than given to whichever is listed first.
+
 `review-desk agents` prints every agent the desk can reach, with its host and what it is doing; `review-desk agents --read <agent>` prints the bottom of its screen.
 
 ## Run it from source
@@ -80,7 +84,7 @@ On Linux, Waybar can poll `review-desk summary`, which prints the summary as JSO
 - `roles`: `author`, `reviewer` or both.
 - `repos` and `people`: the only repositories and people whose pull requests and comments may reach an agent.
 - `owners` (optional): the only repository owners this desk may read, for example `["you", "you-gitea"]` on a personal machine. A desk refuses to start when `repos` lists anything outside them, and `gitea.discoverOwned` never adds one. Without it every owner is allowed.
-- `areas`: which agent reviews which repositories (and, optionally, paths): an agent name, or a terminal address in any host (`w1:p2`, `hc:t11`, `tmux:%3`, `cmux:<id>`, `orca:<id>`, `rex:<session>/<block>`, `claude:<session>`). With none, review requests stay with you, and the board says so.
+- `areas`: which agent reviews which repositories (and, optionally, paths). Name the agent with `agent`, its stable `machine/space/name` address (for example `"agent": "mac-mini/api/api"`), when [reach](https://github.com/SeeThruHead/reach) is installed; or with `session`, an agent name or a terminal address in any host (`w1:p2`, `hc:t11`, `tmux:%3`, `cmux:<id>`, `orca:<id>`, `rex:<session>/<block>`, `claude:<session>`). The desk never guesses: when two agents share the name, or reach finds nobody (or more than one agent) at the address, it sends nothing and the pull request shows in Needs you with the reason. With no areas, review requests stay with you, and the board says so.
 - `hosts` (optional): which hosts to ask, by name: `herdr`, `hc`, `cmux`, `orca`, `rex`, `tmux`, `claude` and any plugin's. Without it every host is asked, and one that is not installed is simply skipped.
 - `plugins` (optional): host plugins with fixed arguments, as `{ "name": …, "command": [...] }`, besides the executables in `~/.review-desk/plugins/` ([docs/host-plugins.md](docs/host-plugins.md)).
 - `agentCommands` (optional): more program names that count as an agent in a tmux pane or a Rex block, on top of `claude`, `codex`, `opencode`, `gemini`, `pi`, `amp`, `aider` and `cursor-agent`.

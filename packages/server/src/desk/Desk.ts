@@ -20,7 +20,7 @@ import {
   Login,
   PrKey,
   type RepoSlug,
-  type SessionName,
+  SessionName,
   Text,
   Url,
   prKey
@@ -46,8 +46,9 @@ import {
   SubscriptionRef
 } from "effect"
 import { Agents, type LiveAgent, type Roster } from "../agents/Agents.ts"
-import { type AgentTarget, targetFor } from "../agents/Remote.ts"
-import { DeskConfig } from "../config/DeskConfig.ts"
+import { targetFor } from "../agents/Directory.ts"
+import type { AgentTarget } from "../agents/Remote.ts"
+import { DeskConfig, areaAgent } from "../config/DeskConfig.ts"
 import { type BranchRuns, type ForgeError, Forges } from "../forge/Forge.ts"
 import { Shell } from "../platform/Shell.ts"
 import { DeskRepo } from "../store/DeskRepo.ts"
@@ -218,18 +219,19 @@ export class Desk extends Context.Service<
           }))
         )
 
-      const liveAgents = agents.list.pipe(
-        Effect.tapError((error) => Effect.logWarning(error.message)),
-        Effect.orElseSucceed(() => [])
-      )
-
       const now = Effect.map(DateTime.now, (time) => IsoTime.make(DateTime.formatIso(time)))
 
       const claimGraceMinutes = config.claimGraceMinutes ?? 30
 
-      const noRoster: Roster = { agents: [], reached: [], complete: false, prefixes: [] }
+      const noRoster: Roster = { agents: [], reached: [], complete: false, prefixes: [], refused: new Map() }
 
-      const roster = agents.roster.pipe(
+      const wantedAgents = repo.records.pipe(
+        Effect.map((records) => [...config.areas.map(areaAgent), ...records.claims.values()]),
+        Effect.orElseSucceed(() => config.areas.map(areaAgent))
+      )
+
+      const roster = wantedAgents.pipe(
+        Effect.flatMap(agents.roster),
         Effect.tapError((error) => Effect.logWarning(error.message)),
         Effect.orElseSucceed(() => noRoster)
       )
@@ -411,13 +413,13 @@ export class Desk extends Context.Service<
 
       const publish = Effect.fnUntraced(function* (
         settings: typeof config,
-        live: ReadonlyArray<LiveAgent>,
+        found: Roster,
         failures: ReadonlyArray<Failure> | null
       ) {
         const facts = yield* Ref.get(factsRef)
         const issues = yield* Ref.get(issuesRef)
         const records = yield* repo.records
-        const steps = plan({ settings, facts, issues, records, agents: live })
+        const steps = plan({ settings, facts, issues, records, agents: found.agents, refused: found.refused })
         const polledAt = yield* now
         const budget = yield* budgetNow
         yield* SubscriptionRef.update(boardRef, (before) => ({
@@ -432,7 +434,7 @@ export class Desk extends Context.Service<
         }))
       })
 
-      const liveRef = yield* Ref.make<ReadonlyArray<LiveAgent>>([])
+      const rosterRef = yield* Ref.make<Roster>(noRoster)
 
       const cycle = lock
         .withPermits(1)(
@@ -444,13 +446,15 @@ export class Desk extends Context.Service<
             const mentioned = yield* fetchAll(fetchMentions)
             yield* Ref.set(factsRef, pulls.found)
             yield* Ref.set(issuesRef, mentioned.found)
-            yield* Ref.set(liveRef, live)
+            yield* Ref.set(rosterRef, found)
             const before = yield* repo.records
-            yield* execute(plan({ settings, facts: pulls.found, records: before, agents: live }))
+            yield* execute(
+              plan({ settings, facts: pulls.found, records: before, agents: live, refused: found.refused })
+            )
             yield* watchBranches(settings, pulls.found, live)
             yield* watchIssues
             yield* releaseGone(found)
-            yield* publish(settings, live, [...pulls.failures, ...mentioned.failures])
+            yield* publish(settings, found, [...pulls.failures, ...mentioned.failures])
           })
         )
         .pipe(
@@ -498,19 +502,22 @@ export class Desk extends Context.Service<
       const claim = Effect.fn("Desk.claim")(function* (key: PrKey, session: SessionName | null, role: Role) {
         yield* Effect.annotateCurrentSpan("pull", key)
         const pull = yield* pullOf(key)
-        const chosen = session ?? areaFor(config, pull)?.session
+        const area = areaFor(config, pull)
+        const chosen = session ?? (area === undefined ? undefined : areaAgent(area))
         if (chosen === undefined)
           return yield* new DeliveryFailed({
             key,
             reason: Text.make("no area in the config covers this repository; pass --session")
           })
         const brief = { owner: config.owner, limit: config.roundLimit, desk: config.desk }
-        const live = yield* liveAgents
+        const found = yield* roster
         const message = role === "author" ? authorBrief(pull, brief) : routingBrief(pull, brief)
+        const targeted = targetFor(chosen, found.agents, found.refused)
+        if (targeted._tag === "Refused") return yield* new DeliveryFailed({ key, reason: Text.make(targeted.reason) })
         yield* agents
-          .prompt(targetFor(chosen, live), message)
+          .prompt(targeted.target, message)
           .pipe(Effect.mapError((error) => new DeliveryFailed({ key, reason: Text.make(error.message) })))
-        yield* repo.claim(key, chosen, role).pipe(Effect.orDie)
+        yield* repo.claim(key, SessionName.make(chosen), role).pipe(Effect.orDie)
         yield* refresh
       })
 
@@ -633,9 +640,9 @@ export class Desk extends Context.Service<
         if (!isWatched(facts, issues, key)) return yield* new UnknownPull({ key })
         yield* repo.markSeen(key).pipe(Effect.orDie)
         const settings = { ...config, repos: yield* Ref.get(reposRef) }
-        const live = yield* Ref.get(liveRef)
+        const found = yield* Ref.get(rosterRef)
         yield* lock
-          .withPermits(1)(publish(settings, live, null))
+          .withPermits(1)(publish(settings, found, null))
           .pipe(Effect.orDie)
       })
 
@@ -654,9 +661,12 @@ export class Desk extends Context.Service<
       }))
 
       const readAgent = Effect.fn("Desk.readAgent")(function* (agent: string, lines: number) {
-        const live = yield* liveAgents
+        const found = yield* roster
+        const targeted = targetFor(agent, found.agents, found.refused)
+        if (targeted._tag === "Refused")
+          return yield* new AgentUnreadable({ agent: Text.make(agent), reason: Text.make(targeted.reason) })
         const text = yield* agents
-          .read(targetFor(agent, live), lines)
+          .read(targeted.target, lines)
           .pipe(
             Effect.mapError(
               (error) => new AgentUnreadable({ agent: Text.make(agent), reason: Text.make(error.reason) })

@@ -14,7 +14,7 @@ Review Desk (github.com/SeeThruHead/review-desk, CLI `review-desk`, brew `seethr
 - The same goes for CI on a Gitea branch you push to directly: push, carry on, and the result arrives as a message. Do not loop on the Actions API.
 - Merge-queue monitoring after the person authorizes a merge stays as the delivery rule describes; the desk stops reporting a pull request once it closes.
 - Claim a pull request whenever your terminal is not already on its branch, so its updates reach you, saying which side you are on: `review-desk claim <forge:owner/repo#n> --as reviewer` (the default) brings replies to your threads and a notice when new commits are pushed; `--as author` brings failed CI runs and the review comments to address. Run it from your terminal. That covers reviewing someone else's pull request from any directory and working one from a checkout on another branch. Your own pull request in its own worktree needs no claim. Claiming posts nothing anywhere.
-- Claims and every other command find your terminal by themselves (`HERDR_PANE_ID`, `HC_TERMINAL_ID`, `CMUX_WORKSPACE_ID`, `ORCA_TERMINAL_HANDLE`, `TMUX_PANE`, or the Claude Code session). `--pane` names another: a Herdr pane id, or `hc:<t>`, `cmux:<id>`, `orca:<id>`, `tmux:<pane>`, `claude:<session>`.
+- Claims and every other command find your terminal by themselves (`HERDR_PANE_ID`, `HC_TERMINAL_ID`, `CMUX_WORKSPACE_ID`, `ORCA_TERMINAL_HANDLE`, `TMUX_PANE`, or the Claude Code session). `--pane` names another: a Herdr pane id, or `hc:<t>`, `cmux:<id>`, `orca:<id>`, `tmux:<pane>`, `claude:<session>`, or `reach:<machine/space/name>`.
 
 ## A pull request the desk routed to you
 

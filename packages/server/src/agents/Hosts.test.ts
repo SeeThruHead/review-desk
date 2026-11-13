@@ -8,6 +8,7 @@ import { executableHost, pluginFile, usablePlugins } from "./hosts/Executable.ts
 import { herdr, herdrFound } from "./hosts/Herdr.ts"
 import { appAgents, connectedMachines, herdrApp } from "./hosts/HerdrApp.ts"
 import { orca, orcaAgents } from "./hosts/Orca.ts"
+import { reach } from "./hosts/Reach.ts"
 import { rex, rexAgent, rexStatus, rexTarget, terminalBlocks } from "./hosts/Rex.ts"
 import { screenStatus, tmux, tmuxPanes } from "./hosts/Tmux.ts"
 
@@ -287,6 +288,37 @@ describe("Orca", () => {
       expect(orca.screen({ id: "o1", machine: null }, 40)).toEqual({
         command: "orca",
         args: ["terminal", "read", "--terminal", "o1", "--screen"]
+      })
+    })
+  )
+})
+
+const reachEntry = (address: string, state: string) => ({
+  address,
+  state,
+  status: "working",
+  host: "herdr-app",
+  id: "t1",
+  cwd: "/w"
+})
+
+describe("reach", () => {
+  it.effect("lists running agents by address, sends on stdin and reads the screen by address", () =>
+    Effect.gen(function* () {
+      const listed = { agents: [reachEntry("mac-mini/api/auth", "live"), reachEntry("sthdev/old/old", "ended")] }
+      const run = answering(new Map([["reach ls --json", json(listed)]]))
+
+      const found = yield* reach.list(envWith(run))
+
+      expect(found).toEqual([
+        { pane: "reach:mac-mini/api/auth", cwd: "/w", status: "working", name: "mac-mini/api/auth" }
+      ])
+      expect(reach.steps({ id: "mac-mini/api/auth", machine: null }, "hi")).toEqual([
+        { command: "reach", args: ["send", "mac-mini/api/auth"], stdin: "hi" }
+      ])
+      expect(reach.screen({ id: "mac-mini/api/auth", machine: null }, 40)).toEqual({
+        command: "reach",
+        args: ["read", "mac-mini/api/auth", "--lines", "40"]
       })
     })
   )

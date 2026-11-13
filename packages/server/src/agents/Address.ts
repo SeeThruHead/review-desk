@@ -1,6 +1,6 @@
 import { Option } from "effect"
 
-export const shippedHostNames = ["herdr", "hc", "cmux", "orca", "rex", "tmux", "claude"] as const
+export const shippedHostNames = ["herdr", "hc", "cmux", "orca", "rex", "tmux", "claude", "reach"] as const
 
 export type ShippedHostName = (typeof shippedHostNames)[number]
 

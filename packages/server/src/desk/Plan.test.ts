@@ -82,6 +82,53 @@ describe("routing review requests to an agent", () => {
     expect(steps.cards.map((card) => card.number)).toEqual([2, 3])
   })
 
+  it("routes an area that names an address to the agent reach found there", () => {
+    const byAddress: Settings = {
+      ...reviewerDesk,
+      areas: [{ name: "auth", agent: "mac-mini/api/auth", repos: [RepoSlug.make("acme/api")] }]
+    }
+    const found = { ...agent("mac-mini/api/auth", "main"), host: "reach", pane: "reach:mac-mini/api/auth" }
+    const steps = plan({ settings: byAddress, facts: [asked], records: empty, agents: [agent("auth", "main"), found] })
+    expect(steps.routes.map((route) => [route.session, route.target])).toEqual([
+      ["mac-mini/api/auth", { machine: null, pane: "reach:mac-mini/api/auth" }]
+    ])
+  })
+
+  it("refuses to route when the area's agent is ambiguous or unresolved, and says why in Needs you", () => {
+    const twins = [agent("auth", "main"), { ...agent("auth", "main"), pane: "hc:t4" }]
+    const steps = plan({ settings: reviewerDesk, facts: [asked], records: empty, agents: twins })
+    expect(steps.routes).toEqual([])
+    expect(steps.cards[0]?.attention?.why).toBe(
+      "Review requested of you; not sent to an agent: 2 agents are called auth (w1:auth, hc:t4); name one by its machine/space/name address"
+    )
+    const byAddress: Settings = {
+      ...reviewerDesk,
+      areas: [{ name: "auth", agent: "mac-mini/api/auth", repos: [RepoSlug.make("acme/api")] }]
+    }
+    const missing = plan({
+      settings: byAddress,
+      facts: [asked],
+      records: empty,
+      agents: [],
+      refused: new Map([["mac-mini/api/auth", { tag: "NotFound", reason: "no agent is at mac-mini/api/auth" }]])
+    })
+    expect(missing.routes).toEqual([])
+    expect(missing.cards[0]?.attention?.why).toBe(
+      "Review requested of you; not sent to an agent: no agent is at mac-mini/api/auth"
+    )
+  })
+
+  it("delivers nothing to a claimed name that two agents share", () => {
+    const facts = {
+      ...asked,
+      threads: [thread("src/auth/refresh.ts", [fromReviewer(1, "Missing await"), fromAuthor(1, "Added the await")])]
+    }
+    const twins = [agent("auth", "main"), { ...agent("auth", "main"), pane: "hc:t4" }]
+    expect(plan({ settings: reviewerDesk, facts: [facts], records: claimed, agents: twins }).deliveries).toEqual([])
+    const one = plan({ settings: reviewerDesk, facts: [facts], records: claimed, agents: [agent("auth", "main")] })
+    expect(one.deliveries.map((delivery) => delivery.agent.pane)).toEqual(["w1:auth"])
+  })
+
   it("never routes or delivers anything from an untrusted person or repository, but still shows it", () => {
     const stranger = pull(5, {
       author: Login.make("mallory"),

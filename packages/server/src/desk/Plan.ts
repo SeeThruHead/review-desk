@@ -1,5 +1,5 @@
 import type { Agent, Board, Card, Mention, Role, Routing } from "@review-desk/contract/Board.ts"
-import { type SessionName, Text } from "@review-desk/contract/Ids.ts"
+import { SessionName, Text } from "@review-desk/contract/Ids.ts"
 import { type Me, attentionOf, issueMention, pullMention } from "@review-desk/domain/Attention.ts"
 import type { IssueFacts, PullFacts, Side } from "@review-desk/domain/Facts.ts"
 import { cardOf, threadState } from "@review-desk/domain/Lifecycle.ts"
@@ -8,8 +8,9 @@ import { readyOrder, relationsOf } from "@review-desk/domain/Relations.ts"
 import { isTrustedPerson, isTrustedRepo, mayReachAgent } from "@review-desk/domain/Trust.ts"
 import { Option } from "effect"
 import type { LiveAgent } from "../agents/Agents.ts"
-import { type AgentTarget, targetFor } from "../agents/Remote.ts"
-import type { Area, DeskSettings } from "../config/DeskConfig.ts"
+import { type Refusals, pickAgent, targetFor } from "../agents/Directory.ts"
+import type { AgentTarget } from "../agents/Remote.ts"
+import { type Area, type DeskSettings, areaAgent } from "../config/DeskConfig.ts"
 import type { Records } from "../store/DeskRepo.ts"
 import { type Brief, type Item, routingBrief, updateMessage } from "./Messages.ts"
 
@@ -24,6 +25,7 @@ export type Inputs = {
   readonly records: Records
   readonly agents: ReadonlyArray<LiveAgent>
   readonly issues?: ReadonlyArray<IssueFacts>
+  readonly refused?: Refusals
 }
 
 export type Route = {
@@ -88,17 +90,25 @@ const remoteMatches = (agent: LiveAgent, pull: PullFacts): boolean =>
 const onBranch = (agent: LiveAgent, pull: PullFacts): boolean =>
   remoteMatches(agent, pull) && Option.getOrElse(agent.branch, () => "") === pull.head
 
-const answersTo = (agent: LiveAgent, session: string | undefined): boolean =>
-  agent.name === session || agent.pane === session
+const noRefusals: Refusals = new Map()
+
+const refusalsOf = (input: Inputs): Refusals => input.refused ?? noRefusals
+
+const claimedAgent = (claimed: string, agents: ReadonlyArray<LiveAgent>, refused: Refusals): LiveAgent | undefined => {
+  const picked = pickAgent(claimed, agents, refused)
+
+  return picked._tag === "One" ? picked.agent : undefined
+}
 
 export const agentFor = (
   pull: PullFacts,
   role: Role,
   records: Records,
-  agents: ReadonlyArray<LiveAgent>
+  agents: ReadonlyArray<LiveAgent>,
+  refused: Refusals
 ): LiveAgent | undefined => {
   const claimed = claimFor(pull, role, records)
-  if (claimed !== undefined) return agents.find((agent) => answersTo(agent, claimed))
+  if (claimed !== undefined) return claimedAgent(claimed, agents, refused)
   if (role === "author") return agents.find((agent) => onBranch(agent, pull))
 
   return undefined
@@ -111,8 +121,9 @@ const claimFor = (pull: PullFacts, role: Role, records: Records): SessionName | 
   return (records.claimRoles.get(pull.key) ?? "reviewer") === role ? session : undefined
 }
 
-const cardAgent = (pull: PullFacts, role: Role, records: Records, agents: ReadonlyArray<LiveAgent>): Agent | null => {
-  const live = agentFor(pull, role, records, agents)
+const cardAgent = (pull: PullFacts, role: Role, input: Inputs): Agent | null => {
+  const { records } = input
+  const live = agentFor(pull, role, records, input.agents, refusalsOf(input))
   if (live !== undefined) return { session: live.name, working: live.working }
   const session = claimFor(pull, role, records)
 
@@ -194,12 +205,15 @@ const routeOf = (input: Inputs, entry: Considered): ReadonlyArray<Route> => {
   if (input.records.claims.has(entry.pull.key)) return []
   const area = areaFor(input.settings, entry.pull)
   if (area === undefined) return []
+  const wanted = areaAgent(area)
+  const targeted = targetFor(wanted, input.agents, refusalsOf(input))
+  if (targeted._tag === "Refused") return []
 
   return [
     {
       pull: entry.pull,
-      session: area.session,
-      target: targetFor(area.session, input.agents),
+      session: SessionName.make(wanted),
+      target: targeted.target,
       message: routingBrief(entry.pull, brief(input.settings)),
       items: itemsOf(entry.pull).map((item) => item.key)
     }
@@ -223,7 +237,7 @@ const deliveryOf = (
   const wanted = fresh.filter((item) => forMe(input.settings, sideOf(role), item) && !limited.has(item.key))
   const failedChecks = role === "author" && pull.checks === "failed" && input.records.known.get(pull.key) !== "failed"
   const pushed = newPush(input.records, pull, role)
-  const agent = agentFor(pull, role, input.records, input.agents)
+  const agent = agentFor(pull, role, input.records, input.agents, refusalsOf(input))
   const unwanted = fresh.filter((item) => !wanted.includes(item)).map((item) => item.key)
   const skipped = { pull, items: [...unwanted, pushKey(pull)] }
 
@@ -291,6 +305,15 @@ const mentionsOf = (input: Inputs, me: Me, considered: ReadonlyArray<Considered>
   ]
 }
 
+const unroutedReason = (input: Inputs, entry: Considered): string | null => {
+  if (entry.role !== "reviewer" || input.records.claims.has(entry.pull.key)) return null
+  const area = areaFor(input.settings, entry.pull)
+  if (area === undefined) return null
+  const targeted = targetFor(areaAgent(area), input.agents, refusalsOf(input))
+
+  return targeted._tag === "Refused" ? targeted.reason : null
+}
+
 const cardFor = (input: Inputs, me: Me, entry: Considered): Card => {
   const { pull } = entry
   const card = cardOf(
@@ -301,7 +324,7 @@ const cardFor = (input: Inputs, me: Me, entry: Considered): Card => {
       trusted: entry.trusted,
       claimed: input.records.claims.has(pull.key),
       triage: input.records.triage.get(pull.key)?.triage ?? null,
-      agent: entry.trusted ? cardAgent(pull, entry.role, input.records, input.agents) : null,
+      agent: entry.trusted ? cardAgent(pull, entry.role, input) : null,
       relations: relationsOf(pull, input.facts),
       delivered: input.records.delivered.get(pull.key) ?? null
     }
@@ -312,6 +335,7 @@ const cardFor = (input: Inputs, me: Me, entry: Considered): Card => {
     me,
     asked: isAsked(input.settings, pull),
     covered: areaFor(input.settings, pull) !== undefined,
+    unrouted: unroutedReason(input, entry),
     leftQueue: leftQueue(input.records, pull)
   }
 

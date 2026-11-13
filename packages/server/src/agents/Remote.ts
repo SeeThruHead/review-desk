@@ -24,12 +24,3 @@ export const parseLocations = (text: string): ReadonlyMap<string, Location> =>
         return [field(parts, 0), { branch: present(field(parts, 1)), remote: present(field(parts, 2)) }] as const
       })
   )
-
-export const targetFor = (
-  name: string,
-  agents: ReadonlyArray<{ readonly name: string; readonly pane: string; readonly machine: string | null }>
-): AgentTarget => {
-  const found = agents.find((agent) => agent.name === name || agent.pane === name)
-
-  return found === undefined ? { machine: null, pane: name } : { machine: found.machine, pane: found.pane }
-}

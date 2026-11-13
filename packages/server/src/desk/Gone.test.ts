@@ -7,6 +7,7 @@ const roster = (fields: Partial<Roster>): Roster => ({
   reached: [placeOf(null, "herdr"), placeOf("STHDEV", "herdr")],
   complete: true,
   prefixes: shippedHostNames,
+  refused: new Map(),
   ...fields
 })
 
@@ -35,6 +36,23 @@ describe("whether a claim's agent is still there", () => {
   it("calls a named agent gone only when every machine answered", () => {
     expect(sightingOf({ ...reviewer, session: "ui-kit" }, roster({}))).toBe("gone")
     expect(sightingOf({ ...reviewer, session: "ui-kit" }, roster({ complete: false }))).toBe("unknown")
+  })
+
+  it("judges a claim by address from what reach said, and never releases an ambiguous one", () => {
+    const byAddress = { ...reviewer, session: "mac-mini/api/auth" }
+    const said = (tag: "NotFound" | "Ended" | "Ambiguous" | "Unavailable") =>
+      roster({ refused: new Map([["mac-mini/api/auth", { tag, reason: tag }]]) })
+    expect(
+      sightingOf(
+        byAddress,
+        roster({ agents: [{ name: "mac-mini/api/auth", machine: null, pane: "reach:mac-mini/api/auth" }] })
+      )
+    ).toBe("present")
+    expect(sightingOf(byAddress, said("NotFound"))).toBe("gone")
+    expect(sightingOf(byAddress, said("Ended"))).toBe("gone")
+    expect(sightingOf(byAddress, said("Ambiguous"))).toBe("unknown")
+    expect(sightingOf(byAddress, said("Unavailable"))).toBe("unknown")
+    expect(sightingOf(byAddress, roster({}))).toBe("unknown")
   })
 
   it("knows nothing when the agents could not be listed at all", () => {

@@ -42,6 +42,7 @@ Print the agents as JSON on stdout and exit 0:
 - `cwd`: the folder the agent works in. The desk reads its branch and remote from there to route pull requests to it.
 - `status` (optional): `idle`, `working`, `blocked` (waiting on a person) or `unknown`, the default.
 - `name` (optional): a name areas and `--session` can use instead of the address.
+- `space` and `address` (optional): read by [reach](https://github.com/SeeThruHead/reach), which loads the same plugins, to give the agent a stable `machine/space/name` address. Areas then name the agent by that address and the desk reaches it through reach.
 
 Exit non-zero, or print something that is not this JSON, when the host cannot be reached. That counts as "did not answer": nothing is released. An empty list means the host answered and has no agents, so claims held by its agents start counting toward release.
 

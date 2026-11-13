@@ -70,6 +70,20 @@ const markerRounds = (thread: Thread | undefined, side: Side): number =>
     )
   )
 
+export const findOrPoll = Effect.fnUntraced(function* <A, E>(
+  find: Effect.Effect<A | undefined>,
+  poll: Effect.Effect<void>,
+  missing: () => E
+) {
+  const found = yield* find
+  if (found !== undefined) return found
+  yield* poll
+  const polled = yield* find
+  if (polled === undefined) return yield* Effect.fail(missing())
+
+  return polled
+})
+
 export const roundFor = (thread: Thread | undefined, side: Side): number => {
   const reviewerRounds = markerRounds(thread, "reviewer")
 
@@ -482,13 +496,10 @@ export class Desk extends Context.Service<
 
       const refresh = Effect.asVoid(Effect.forkDetach(cycle))
 
-      const pullOf = Effect.fnUntraced(function* (key: PrKey) {
-        const facts = yield* Ref.get(factsRef)
-        const found = facts.find((pull) => pull.key === key)
-        if (found === undefined) return yield* new UnknownPull({ key })
+      const known = (key: PrKey) =>
+        Ref.get(factsRef).pipe(Effect.map((facts) => facts.find((pull) => pull.key === key)))
 
-        return found
-      })
+      const pullOf = (key: PrKey) => findOrPoll(known(key), cycle, () => new UnknownPull({ key }))
 
       const reportTriage = Effect.fn("Desk.reportTriage")(function* (report: TriageReport) {
         yield* Effect.annotateCurrentSpan("pull", report.key)

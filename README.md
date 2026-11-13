@@ -9,6 +9,7 @@ Agents do the first rounds of code review with each other; you get a queue of th
 **Needs you** also lists, each with why, everything else that is waiting on you:
 
 - A review request no agent area covers.
+- A pull request you review where the author changed the code under your comment without replying: they may have fixed it with a commit, so check.
 - One of your own pull requests that a person commented on or asked changes for, that is ready to merge, that left the merge queue, or whose CI failed with no agent working on it.
 - An issue or pull request in your configured repositories where someone @mentioned you. Mention text is shown to you only; it never reaches an agent.
 
@@ -41,6 +42,8 @@ Herdr is optional. Every terminal host below is built in and on by default: each
 | Orca | `orca terminal list --json` | `orca terminal send --enter` | not reported |
 | Rex | blocks running a known agent program | one bracketed paste with `rex send`, then Enter | the program's own status report (OSC 7501) |
 | Claude Code | sessions with an inbox and no terminal of their own | the session's inbox | the session's status |
+
+Any other host can be added without changing the desk: drop an executable that answers `list`, `send` and `read` into `~/.review-desk/plugins/`. [docs/host-plugins.md](docs/host-plugins.md) has the contract and a working example; the hosts above are built on the same contract.
 
 `review-desk agents` prints every agent the desk can reach, with its host and what it is doing; `review-desk agents --read <agent>` prints the bottom of its screen.
 
@@ -78,7 +81,8 @@ On Linux, Waybar can poll `review-desk summary`, which prints the summary as JSO
 - `repos` and `people`: the only repositories and people whose pull requests and comments may reach an agent.
 - `owners` (optional): the only repository owners this desk may read, for example `["you", "you-gitea"]` on a personal machine. A desk refuses to start when `repos` lists anything outside them, and `gitea.discoverOwned` never adds one. Without it every owner is allowed.
 - `areas`: which agent reviews which repositories (and, optionally, paths): an agent name, or a terminal address in any host (`w1:p2`, `hc:t11`, `tmux:%3`, `cmux:<id>`, `orca:<id>`, `rex:<session>/<block>`, `claude:<session>`). With none, review requests stay with you, and the board says so.
-- `hosts` (optional): which terminal hosts to ask, from `herdr`, `hc`, `cmux`, `orca`, `rex`, `tmux` and `claude`. Without it every host is asked, and one that is not installed is simply skipped.
+- `hosts` (optional): which hosts to ask, by name: `herdr`, `hc`, `cmux`, `orca`, `rex`, `tmux`, `claude` and any plugin's. Without it every host is asked, and one that is not installed is simply skipped.
+- `plugins` (optional): host plugins with fixed arguments, as `{ "name": …, "command": [...] }`, besides the executables in `~/.review-desk/plugins/` ([docs/host-plugins.md](docs/host-plugins.md)).
 - `agentCommands` (optional): more program names that count as an agent in a tmux pane or a Rex block, on top of `claude`, `codex`, `opencode`, `gemini`, `pi`, `amp`, `aider` and `cursor-agent`.
 - `roundLimit`, `intakeLabel`, `pollSeconds`, `port`.
 - `sidediff.checkouts`: where to open pull requests in sidediff.

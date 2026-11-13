@@ -1,7 +1,7 @@
 import type { Attention, Card, Mention, Verdict } from "@review-desk/contract/Board.ts"
 import { IsoTime, type Login, prKey, Text } from "@review-desk/contract/Ids.ts"
 import { Array, Option, Order } from "effect"
-import type { IssueFacts, PullFacts, Review } from "./Facts.ts"
+import type { IssueFacts, PullFacts, Review, Thread } from "./Facts.ts"
 import { excerpt, isFromAgent } from "./Protocol.ts"
 
 export type Said = {
@@ -89,6 +89,26 @@ export type Look = {
 
 const forYouThread = (card: Card): boolean => (card.threads ?? []).some((thread) => thread.status === "for-you")
 
+const leftByMe =
+  (me: Me) =>
+  (thread: Thread): boolean => {
+    const last = thread.comments.at(-1)
+    if (thread.resolved || thread.changedSince !== true) return false
+    if (last === undefined) return false
+
+    return isMine(me, last.author) && !isFromAgent(last.body)
+  }
+
+const answeredByCommit = (look: Look): Attention | null => {
+  const thread = look.facts.threads.find(leftByMe(look.me))
+  if (thread === undefined) return null
+
+  return attention(
+    `${look.facts.author} changed the code under your comment on ${thread.path} without replying; check it is fixed`,
+    look.facts.updatedAt
+  )
+}
+
 const reviewerNeed = (look: Look): Attention | null => {
   const { card, facts } = look
   if (card.stage === "ready")
@@ -99,6 +119,8 @@ const reviewerNeed = (look: Look): Attention | null => {
       card.activity?.at ?? facts.updatedAt
     )
   if (forYouThread(card)) return attention("A thread used all its agent rounds; it is yours now", facts.updatedAt)
+  const fixed = answeredByCommit(look)
+  if (fixed !== null) return fixed
   if (!look.asked || card.claimed || look.covered) return null
   if (card.stage !== "requested" && card.stage !== "waiting") return null
 

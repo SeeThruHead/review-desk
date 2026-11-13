@@ -47,6 +47,7 @@ const ReviewCommentJson = Schema.Struct({
   body: Schema.String,
   path: Schema.String,
   position: Schema.NullOr(Schema.Finite),
+  commit_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   created_at: Schema.String,
   html_url: Schema.String,
   user: User,
@@ -125,7 +126,14 @@ const checksOf = (status: typeof StatusJson.Type) => {
 
 const threadKey = (comment: ReviewCommentJson) => `${comment.path}:${comment.position ?? 0}`
 
-export const threadsOf = (comments: ReadonlyArray<ReviewCommentJson>): ReadonlyArray<Thread> =>
+const changedSince = (group: ReadonlyArray<ReviewCommentJson>, headSha: string): boolean => {
+  const commit = group.at(-1)?.commit_id
+  if (!commit) return false
+
+  return commit !== headSha
+}
+
+export const threadsOf = (comments: ReadonlyArray<ReviewCommentJson>, headSha: string): ReadonlyArray<Thread> =>
   [
     ...Map.groupBy(
       comments.toSorted((a, b) => a.id - b.id),
@@ -140,6 +148,7 @@ export const threadsOf = (comments: ReadonlyArray<ReviewCommentJson>): ReadonlyA
             path: Text.make(group[0].path),
             line: group[0].position,
             resolved: group.some((comment) => comment.resolver !== undefined && comment.resolver !== null),
+            ...(changedSince(group, headSha) ? { changedSince: true } : {}),
             comments: group.map((comment): Comment => ({
               id: ForgeId.make(String(comment.id)),
               author: loginOf(comment.user),
@@ -196,7 +205,7 @@ export const factsOf = (repo: RepoSlug, pull: PullJson, details: Details): PullF
     at: IsoTime.make(review.submitted_at ?? pull.updated_at),
     url: Url.make(review.html_url)
   })),
-  threads: threadsOf(details.reviewComments),
+  threads: threadsOf(details.reviewComments, pull.head.sha),
   comments: details.comments.map((comment) => ({
     id: ForgeId.make(String(comment.id)),
     author: loginOf(comment.user),

@@ -26,6 +26,7 @@ export const Thread = Schema.Struct({
   path: Text,
   line: Schema.NullOr(Schema.Int),
   resolved: Schema.Boolean,
+  changedSince: Schema.optionalKey(Schema.Boolean),
   comments: Schema.Array(Comment)
 })
 export type Thread = typeof Thread.Type

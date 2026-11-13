@@ -173,6 +173,15 @@ describe("what on his own pull request needs him", () => {
   })
 })
 
+const leftOn = (comments: Parameters<typeof thread>[1], extra: object = {}) =>
+  reviewer(
+    theirs({ threads: [{ ...thread("a.ts", comments), changedSince: true, ...extra }] }),
+    {},
+    {
+      stage: "reviewing"
+    }
+  )
+
 describe("what on a pull request he reviews needs him", () => {
   it("asks for him when the agent's review is done, with its verdict", () => {
     const facts = theirs()
@@ -221,6 +230,22 @@ describe("what on a pull request he reviews needs him", () => {
     expect(why(reviewer(theirs(), asked, { stage: "waiting" }))).toBe(
       "Review requested of you; no agent area covers it"
     )
+  })
+
+  it("asks him to check a fix when the author changed the code under his comment without replying", () => {
+    const left = { ...thread("src/auth.ts", [said(dana, "This leaks the token", 4)]), changedSince: true }
+
+    expect(why(reviewer(theirs({ threads: [left] }), {}, { stage: "reviewing" }))).toBe(
+      "lee changed the code under your comment on src/auth.ts without replying; check it is fixed"
+    )
+  })
+
+  it("leaves a changed thread alone once someone replied, it is resolved, his agent wrote last, or nothing changed", () => {
+    expect(why(leftOn([said(dana, "Leaks", 4), said(lee, "Not a leak, see the docs", 5)]))).toBeNull()
+    expect(why(leftOn([said(dana, "Leaks", 4)], { resolved: true }))).toBeNull()
+    expect(why(leftOn([fromReviewer(1, "Leaks")]))).toBeNull()
+    expect(why(leftOn([said(dana, "Leaks", 4)], { changedSince: false }))).toBeNull()
+    expect(why(leftOn([]))).toBeNull()
   })
 
   it("leaves a request to the agent that covers it or claimed it, and anything already under way", () => {

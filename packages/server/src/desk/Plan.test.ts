@@ -209,6 +209,12 @@ describe("delivering what the other side wrote", () => {
   })
 })
 
+const changed = (line: number | null) => ({
+  ...thread("a.ts", [fromReviewer(1, "Rename this")]),
+  line,
+  changedSince: true
+})
+
 describe("claiming a pull request as its reviewer or its author", () => {
   const theirs = pull(11, {
     author: Login.make("lee"),
@@ -251,6 +257,7 @@ describe("claiming a pull request as its reviewer or its author", () => {
     expect(pushed.deliveries[0]?.message).toContain("New commits were pushed; the branch is now at def5678")
     expect(pushed.deliveries[0]?.message).not.toContain("CI failed")
     expect(pushed.remember[0]?.items).toContain("h:def5678aaaa")
+    expect(pushed.deliveries[0]?.message).not.toContain("No reply yet")
 
     const firstLook = plan({
       settings: reviewerDesk,
@@ -259,6 +266,23 @@ describe("claiming a pull request as its reviewer or its author", () => {
       agents: [fixer]
     })
     expect(firstLook.deliveries).toEqual([])
+  })
+
+  it("points a reviewer claim at its unanswered threads whose code the new commits changed", () => {
+    const steps = (line: number | null) =>
+      plan({
+        settings: reviewerDesk,
+        facts: [{ ...theirs, threads: [changed(line), thread("b.ts", [fromReviewer(1, "Typo")])] }],
+        records: claimedAs("reviewer", ["h:old0000", `t:${theirs.threads[0]?.comments[0]?.id}`]),
+        agents: [fixer]
+      }).deliveries[0]?.message
+
+    expect(steps(10)).toContain(
+      "No reply yet, but the new commits changed the code under these threads of yours: comment t-a.ts on a.ts:10."
+    )
+    expect(steps(10)).toContain(`review-desk comment ${theirs.key} --reply-to <comment id> --outcome fixed`)
+    expect(steps(null)).toContain("comment t-a.ts on a.ts.")
+    expect(steps(10)).not.toContain("b.ts")
   })
 
   it("does not hand the author's updates to a reviewer claim on a pull request the desk wrote", () => {

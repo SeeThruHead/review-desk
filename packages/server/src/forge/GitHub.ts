@@ -76,6 +76,7 @@ const PullNode = Schema.Struct({
   reviewThreads: Nodes(
     Schema.Struct({
       isResolved: Schema.Boolean,
+      isOutdated: Schema.optionalKey(Schema.Boolean),
       path: Schema.String,
       line: Schema.NullOr(Schema.Finite),
       comments: Nodes(CommentNode)
@@ -141,7 +142,7 @@ const PULL_FIELDS = `fragment Pull on PullRequest {
     latest: commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
     reviews(last: 50) { nodes { databaseId state body submittedAt url ${AUTHOR} } }
     comments(last: 50) { nodes { databaseId body createdAt url ${AUTHOR} } }
-    reviewThreads(last: 50) { nodes { isResolved path line comments(first: 30) { nodes { databaseId body createdAt url ${AUTHOR} } } } }
+    reviewThreads(last: 50) { nodes { isResolved isOutdated path line comments(first: 30) { nodes { databaseId body createdAt url ${AUTHOR} } } } }
 }`
 
 export const DETAIL_QUERY = `query($ids: [ID!]!) { nodes(ids: $ids) { ...Pull } }
@@ -241,6 +242,7 @@ export const factsOf = (repo: RepoSlug, node: PullNode): PullFacts => ({
     path: Text.make(thread.path),
     line: thread.line,
     resolved: thread.isResolved,
+    ...(thread.isOutdated === true ? { changedSince: true } : {}),
     comments: thread.comments.nodes.map(comment)
   })),
   comments: node.comments.nodes.map(comment),

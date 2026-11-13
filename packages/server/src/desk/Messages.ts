@@ -1,5 +1,6 @@
 import type { Role } from "@review-desk/contract/Board.ts"
-import type { Comment, PullFacts } from "@review-desk/domain/Facts.ts"
+import type { Comment, PullFacts, Thread } from "@review-desk/domain/Facts.ts"
+import { answeredByCommit } from "@review-desk/domain/Lifecycle.ts"
 import { excerpt, markerOf } from "@review-desk/domain/Protocol.ts"
 import { Option } from "effect"
 
@@ -86,6 +87,18 @@ const instructionsFor = (
 
 export type Changes = { readonly failedChecks: boolean; readonly pushed: boolean }
 
+const threadPlace = (thread: Thread): string =>
+  `comment ${thread.id} on ${thread.path}${thread.line === null ? "" : `:${thread.line}`}`
+
+const answeredLines = (pull: PullFacts, brief: Brief): ReadonlyArray<string> => {
+  const changed = pull.threads.filter((thread) => answeredByCommit(thread, brief.limit))
+  if (changed.length === 0) return []
+
+  return [
+    `- No reply yet, but the new commits changed the code under these threads of yours: ${changed.map(threadPlace).join(", ")}. Check each against the new code. If it is fixed, reply: review-desk comment ${pull.key} --reply-to <comment id> --outcome fixed --body "<what fixed it>". If not, leave it open.`
+  ]
+}
+
 const pushedLine = (pull: PullFacts) =>
   `- New commits were pushed; the branch is now at ${pull.headSha.slice(0, 7)}. Fetch it, read what changed since you last reviewed, and comment only on what the new commits settle or raise.`
 
@@ -104,6 +117,6 @@ export const updateMessage = (
           `- CI failed on ${pull.headSha.slice(0, 7)}. Read the failing job's log, fix the cause in this branch and push.`
         ]
       : []),
-    ...(changes.pushed ? [pushedLine(pull)] : []),
+    ...(changes.pushed ? [pushedLine(pull), ...answeredLines(pull, brief)] : []),
     ...instructionsFor(pull, role, items, brief)
   ].join("\n")

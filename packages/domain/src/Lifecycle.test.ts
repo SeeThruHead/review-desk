@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { PrKey, SessionName, Text } from "@review-desk/contract/Ids.ts"
 import { lee, fromAuthor, fromPerson, fromReviewer, pull, review, dana, thread } from "./Facts.testing.ts"
-import { type Context, cardOf, threadState } from "./Lifecycle.ts"
+import { type Context, answeredByCommit, cardOf, threadState } from "./Lifecycle.ts"
 
 const desk = { logins: ["dana", "dana-gitea"], limit: 3, intakeLabel: "agent-review" }
 
@@ -85,6 +85,19 @@ describe("a review thread between two agents", () => {
       _tag: "Human"
     })
     expect(threadState(thread("a.ts", []), 3)).toEqual({ _tag: "Human" })
+  })
+})
+
+describe("a thread the author answered with a commit instead of a reply", () => {
+  it("is one waiting on the author whose code changed since", () => {
+    const waiting = thread("a.ts", [fromReviewer(1, "Leaks the token")])
+
+    expect(answeredByCommit({ ...waiting, changedSince: true }, 3)).toBe(true)
+    expect(answeredByCommit(waiting, 3)).toBe(false)
+    expect(answeredByCommit({ ...waiting, changedSince: true, resolved: true }, 3)).toBe(false)
+    expect(
+      answeredByCommit({ ...thread("a.ts", [fromReviewer(1, "Leaks"), fromAuthor(1, "Fixed")]), changedSince: true }, 3)
+    ).toBe(false)
   })
 })
 

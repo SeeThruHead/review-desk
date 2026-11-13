@@ -83,6 +83,30 @@ describe("reading a GitHub pull request", () => {
     expect([facts.review, facts.queue, facts.createdAt]).toEqual([null, null, undefined])
   })
 
+  it("marks a thread whose code changed since, from GitHub's outdated flag, and asks for it", () => {
+    const comment = {
+      databaseId: 9,
+      body: "Leaks the token",
+      createdAt: "2026-11-05T09:40:00Z",
+      url: "https://github.com/acme/api/pull/7#t9",
+      author: author("dana")
+    }
+    const threadOf = (isOutdated: boolean | undefined) => ({
+      isResolved: false,
+      ...(isOutdated === undefined ? {} : { isOutdated }),
+      path: "src/auth.ts",
+      line: 12,
+      comments: { nodes: [comment] }
+    })
+    const read = (isOutdated: boolean | undefined) =>
+      factsOf(RepoSlug.make("acme/api"), { ...node, reviewThreads: { nodes: [threadOf(isOutdated)] } }).threads[0]
+
+    expect(read(true)?.changedSince).toBe(true)
+    expect(read(false)).not.toHaveProperty("changedSince")
+    expect(read(undefined)).not.toHaveProperty("changedSince")
+    expect(DETAIL_QUERY).toContain("reviewThreads(last: 50) { nodes { isResolved isOutdated path line")
+  })
+
   it("asks for mentioned issues and the rate budget in the same list call", () => {
     expect(LIST_QUERY).toContain("mentioned: search(query: $mentioned, type: ISSUE, first: 20)")
     expect(LIST_QUERY).toContain("rateLimit { limit remaining resetAt }")

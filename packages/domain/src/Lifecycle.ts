@@ -42,6 +42,13 @@ export const threadState = (thread: Thread, limit: number): ThreadState => {
   return { _tag: "Open", round, waitingOn: lastMarker.value.side === "reviewer" ? "author" : "reviewer" }
 }
 
+export const answeredByCommit = (thread: Thread, limit: number): boolean => {
+  if (thread.changedSince !== true) return false
+  const state = threadState(thread, limit)
+
+  return state._tag === "Open" && state.waitingOn === "author"
+}
+
 const settledAs = (marker: Option.Option<Marker>): Outcome =>
   Option.match(marker, {
     onNone: () => "fixed",

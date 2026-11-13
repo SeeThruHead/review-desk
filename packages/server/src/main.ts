@@ -6,6 +6,7 @@ import { Cause, Config, Console, Effect, FileSystem, Layer, Option, Path, Schema
 import { Argument, Command, Flag } from "effect/cli"
 import { FetchHttpClient } from "effect/http"
 import { RpcClient, RpcSerialization } from "effect/rpc"
+import packageJson from "../package.json" with { type: "json" }
 import { callerAddress } from "./agents/Address.ts"
 import { Agents } from "./agents/Agents.ts"
 import { ClaudeSession } from "./agents/hosts/Claude.ts"
@@ -334,7 +335,7 @@ const messageOf = (cause: Cause.Cause<unknown>): string =>
   })
 
 cli.pipe(
-  Command.run({ version: "0.6.0" }),
+  Command.run({ version: packageJson.version }),
   Effect.tapCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Console.error(messageOf(cause)))),
   Effect.provide(BunServices.layer),
   BunRuntime.runMain

@@ -23,8 +23,8 @@ const appAgent =
   (machine: string | null) =>
   (terminal: typeof AppTerminal.Type): ReadonlyArray<Found> => {
     if (!terminal.agent) return []
-    if (!terminal.status) return []
-    if (terminal.agent.endsWith("-asleep")) return []
+    const status = terminal.agent.endsWith("-asleep") ? "idle" : terminal.status
+    if (!status) return []
     if (terminal.state !== "live") return []
     if (!terminal.cwd) return []
     if (terminal.address.includes("/")) return []
@@ -34,7 +34,7 @@ const appAgent =
       {
         pane: `hc:${address}`,
         cwd: terminal.cwd,
-        status: statusOf(terminal.status),
+        status: statusOf(status),
         ...(terminal.name ? { name: terminal.name } : {})
       }
     ]

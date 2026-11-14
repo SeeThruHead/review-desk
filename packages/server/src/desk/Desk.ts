@@ -58,7 +58,7 @@ import { claimId, issuePlan } from "./IssueWatch.ts"
 import { type RepoRef, withDiscovered } from "./Repos.ts"
 import { type Failure, crashed, healthAfter, overdue, starting } from "./Health.ts"
 import { authorBrief, routingBrief } from "./Messages.ts"
-import { areaFor, plan, roleOf, routingOf } from "./Plan.ts"
+import { areaFor, heldNotices, plan, roleOf, routingOf } from "./Plan.ts"
 
 const markerRounds = (thread: Thread | undefined, side: Side): number =>
   Math.max(
@@ -288,7 +288,13 @@ export class Desk extends Context.Service<
         Effect.catch((error) => Effect.logWarning(error.message))
       )
 
+      const heldRef = yield* Ref.make<ReadonlyMap<string, number>>(new Map())
+
       const execute = Effect.fn("Desk.execute")(function* (steps: ReturnType<typeof plan>) {
+        const heldBefore = yield* Ref.get(heldRef)
+        const held = heldNotices(heldBefore, steps.held)
+        yield* Ref.set(heldRef, held.next)
+        yield* Effect.forEach(held.notices, (notice) => Effect.logWarning(notice), { discard: true })
         yield* Effect.forEach(
           steps.routes,
           (route) =>
@@ -314,7 +320,11 @@ export class Desk extends Context.Service<
                   `delivered ${delivery.items.length} updates on ${delivery.pull.key} to ${placeOf(delivery.agent)}`
                 )
               ),
-              Effect.catch((error) => Effect.logWarning(error.message))
+              Effect.catch((error) =>
+                Effect.logWarning(
+                  `could not deliver updates on ${delivery.pull.key} to ${placeOf(delivery.agent)}; they stay unseen and go next poll: ${error.message}`
+                )
+              )
             ),
           { discard: true }
         )
@@ -322,7 +332,7 @@ export class Desk extends Context.Service<
           steps.remember,
           (entry) =>
             repo
-              .remember(entry.pull.key, entry.pull.checks, entry.items)
+              .remember(entry.pull.key, entry.checks ?? entry.pull.checks, entry.items)
               .pipe(Effect.catch((error) => Effect.logWarning(error.message))),
           { discard: true }
         )

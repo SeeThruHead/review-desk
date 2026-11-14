@@ -1,5 +1,5 @@
 import type { Agent, Board, Card, Mention, Role, Routing } from "@review-desk/contract/Board.ts"
-import { SessionName, Text } from "@review-desk/contract/Ids.ts"
+import { type PrKey, SessionName, Text } from "@review-desk/contract/Ids.ts"
 import { type Me, attentionOf, issueMention, pullMention } from "@review-desk/domain/Attention.ts"
 import type { IssueFacts, PullFacts, Side } from "@review-desk/domain/Facts.ts"
 import { cardOf, threadState } from "@review-desk/domain/Lifecycle.ts"
@@ -44,7 +44,13 @@ export type Delivery = {
   readonly items: ReadonlyArray<string>
 }
 
-export type Remember = { readonly pull: PullFacts; readonly items: ReadonlyArray<string> }
+export type Remember = {
+  readonly pull: PullFacts
+  readonly items: ReadonlyArray<string>
+  readonly checks?: string | undefined
+}
+
+export type Held = { readonly pull: PrKey; readonly session: SessionName; readonly updates: number }
 
 export type Plan = {
   readonly cards: ReadonlyArray<Card>
@@ -54,6 +60,7 @@ export type Plan = {
   readonly routes: ReadonlyArray<Route>
   readonly deliveries: ReadonlyArray<Delivery>
   readonly remember: ReadonlyArray<Remember>
+  readonly held: ReadonlyArray<Held>
 }
 
 type Keyed = Item & { readonly key: string }
@@ -220,17 +227,39 @@ const routeOf = (input: Inputs, entry: Considered): ReadonlyArray<Route> => {
   ]
 }
 
-const deliveryOf = (
-  input: Inputs,
-  entry: Considered
-): { readonly deliveries: ReadonlyArray<Delivery>; readonly remember: ReadonlyArray<Remember> } => {
+type Handled = {
+  readonly deliveries: ReadonlyArray<Delivery>
+  readonly remember: ReadonlyArray<Remember>
+  readonly held: ReadonlyArray<Held>
+}
+
+const heldFor = (pull: PullFacts, role: Role, records: Records, updates: number): ReadonlyArray<Held> => {
+  const session = claimFor(pull, role, records)
+
+  return session === undefined ? [] : [{ pull: pull.key, session, updates }]
+}
+
+export const heldNotices = (
+  before: ReadonlyMap<string, number>,
+  held: ReadonlyArray<Held>
+): { readonly next: ReadonlyMap<string, number>; readonly notices: ReadonlyArray<string> } => ({
+  next: new Map(held.map((entry) => [entry.pull, entry.updates])),
+  notices: held
+    .filter((entry) => before.get(entry.pull) !== entry.updates)
+    .map(
+      (entry) =>
+        `holding ${plural(entry.updates, "update")} on ${entry.pull}: its claimed agent ${entry.session} is not listed, so they stay unseen until it is`
+    )
+})
+
+const deliveryOf = (input: Inputs, entry: Considered): Handled => {
   const { pull, role } = entry
-  const nothing = { deliveries: [], remember: [] }
+  const nothing = { deliveries: [], remember: [], held: [] }
   if (!entry.trusted || pull.state !== "open") return nothing
   if (role === "reviewer" && !input.records.claims.has(pull.key)) return nothing
   const all = itemsOf(pull)
   if (!input.records.known.has(pull.key))
-    return { deliveries: [], remember: [{ pull, items: [...all.map((item) => item.key), pushKey(pull)] }] }
+    return { deliveries: [], remember: [{ pull, items: [...all.map((item) => item.key), pushKey(pull)] }], held: [] }
 
   const limited = atLimit(pull, input.settings.roundLimit)
   const fresh = all.filter((item) => !input.records.seen.has(`${pull.key} ${item.key}`))
@@ -240,9 +269,19 @@ const deliveryOf = (
   const agent = agentFor(pull, role, input.records, input.agents, refusalsOf(input))
   const unwanted = fresh.filter((item) => !wanted.includes(item)).map((item) => item.key)
   const skipped = { pull, items: [...unwanted, pushKey(pull)] }
+  const waiting = {
+    pull,
+    items: pushed ? unwanted : skipped.items,
+    ...(failedChecks ? { checks: input.records.known.get(pull.key) } : {})
+  }
 
-  if (wanted.length === 0 && !failedChecks && !pushed) return { deliveries: [], remember: [skipped] }
-  if (agent === undefined) return { deliveries: [], remember: [pushed ? { pull, items: unwanted } : skipped] }
+  if (wanted.length === 0 && !failedChecks && !pushed) return { deliveries: [], remember: [skipped], held: [] }
+  if (agent === undefined)
+    return {
+      deliveries: [],
+      remember: [waiting],
+      held: heldFor(pull, role, input.records, wanted.length + Number(failedChecks) + Number(pushed))
+    }
 
   return {
     deliveries: [
@@ -251,10 +290,11 @@ const deliveryOf = (
         agent: { machine: agent.machine, pane: agent.pane },
         message: updateMessage(pull, role, wanted, { failedChecks, pushed }, brief(input.settings)),
         note: `Sent ${deliveryNote(wanted.length, { failedChecks, pushed })}`,
-        items: wanted.map((item) => item.key)
+        items: [...wanted.map((item) => item.key), ...(pushed ? [pushKey(pull)] : [])]
       }
     ],
-    remember: [skipped]
+    remember: [waiting],
+    held: []
   }
 }
 
@@ -362,6 +402,7 @@ export const plan = (input: Inputs): Plan => {
     remember: [
       ...handled.flatMap((entry) => entry.remember),
       ...considered.flatMap((entry) => queueMemory(input.records, entry.pull))
-    ]
+    ],
+    held: handled.flatMap((entry) => entry.held)
   }
 }

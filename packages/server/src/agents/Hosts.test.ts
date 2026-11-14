@@ -155,13 +155,13 @@ describe("the Herdr TUI", () => {
 })
 
 describe("the Herdr app", () => {
-  it("keeps live terminals running an agent, not a parked one, with what each is doing", () => {
+  it("keeps live terminals running an agent, asleep ones as idle since a message wakes them, with what each is doing", () => {
     expect(
       appAgents([
         { address: "t11", agent: "claude-code", cwd: "/w/api", state: "live", status: "working" },
         { address: "t1", agent: "codex", cwd: "/w/web", state: "live", status: "idle" },
         { address: "t12", agent: "codex", cwd: "/w/web", state: "live", status: "blocked" },
-        { address: "t7", agent: "claude-asleep", cwd: "/w/web", state: "live", status: "idle" },
+        { address: "t7", agent: "claude-asleep", cwd: "/w/web", state: "live", status: null },
         { address: "t2", agent: "", cwd: "/w/shell", state: "live", status: "idle" },
         { address: "t3", agent: null, cwd: "/w/shell", state: "live", status: null },
         { address: "t6", agent: "codex", cwd: "/w/x" },
@@ -172,7 +172,8 @@ describe("the Herdr app", () => {
     ).toEqual([
       { pane: "hc:t11", cwd: "/w/api", status: "working" },
       { pane: "hc:t1", cwd: "/w/web", status: "idle" },
-      { pane: "hc:t12", cwd: "/w/web", status: "blocked" }
+      { pane: "hc:t12", cwd: "/w/web", status: "blocked" },
+      { pane: "hc:t7", cwd: "/w/web", status: "idle" }
     ])
   })
 

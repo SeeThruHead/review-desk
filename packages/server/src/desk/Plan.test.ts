@@ -6,7 +6,7 @@ import { Option } from "effect"
 import type { LiveAgent } from "../agents/Agents.ts"
 import type { Records } from "../store/DeskRepo.ts"
 import { authorBrief } from "./Messages.ts"
-import { type Settings, deliveryNote, plan } from "./Plan.ts"
+import { type Settings, deliveryNote, heldNotices, plan } from "./Plan.ts"
 
 const reviewerDesk: Settings = {
   desk: Login.make("dana"),
@@ -303,7 +303,8 @@ describe("claiming a pull request as its reviewer or its author", () => {
     expect(pushed.deliveries.map((delivery) => delivery.agent.pane)).toEqual(["w1:fixer"])
     expect(pushed.deliveries[0]?.message).toContain("New commits were pushed; the branch is now at def5678")
     expect(pushed.deliveries[0]?.message).not.toContain("CI failed")
-    expect(pushed.remember[0]?.items).toContain("h:def5678aaaa")
+    expect(pushed.deliveries[0]?.items).toContain("h:def5678aaaa")
+    expect(pushed.remember[0]?.items).not.toContain("h:def5678aaaa")
     expect(pushed.deliveries[0]?.message).not.toContain("No reply yet")
 
     const firstLook = plan({
@@ -375,6 +376,36 @@ describe("claiming a pull request as its reviewer or its author", () => {
     expect(steps.deliveries).toEqual([])
     expect(steps.remember[0]?.items).not.toContain("h:def5678aaaa")
     expect(steps.cards[0]?.agent).toEqual({ session: "fixer", working: false })
+    expect(steps.held).toEqual([{ pull: theirs.key, session: "fixer", updates: 1 }])
+  })
+
+  it("leaves a claim's new comments unseen while its agent is not listed, and delivers them once it is", () => {
+    const records = claimedAs("author", [])
+    const away = plan({ settings: reviewerDesk, facts: [theirs], records, agents: [] })
+    const back = plan({ settings: reviewerDesk, facts: [theirs], records, agents: [fixer] })
+    const comment = `t:${theirs.threads[0]?.comments[0]?.id}`
+
+    expect(away.deliveries).toEqual([])
+    expect(away.remember.flatMap((entry) => entry.items)).not.toContain(comment)
+    expect(away.remember.map((entry) => entry.checks)).toEqual(["passed"])
+    expect(away.held).toEqual([{ pull: theirs.key, session: "fixer", updates: 2 }])
+    expect(back.deliveries.map((delivery) => [delivery.agent.pane, delivery.items])).toEqual([["w1:fixer", [comment]]])
+    expect(back.held).toEqual([])
+  })
+
+  it("says once that a claim's updates are held, and again only when more arrive", () => {
+    const held = { pull: theirs.key, session: SessionName.make("fixer"), updates: 1 }
+    const first = heldNotices(new Map(), [held])
+    const same = heldNotices(first.next, [held])
+    const more = heldNotices(same.next, [{ ...held, updates: 2 }])
+
+    expect(first.notices).toEqual([
+      `holding 1 update on ${theirs.key}: its claimed agent fixer is not listed, so they stay unseen until it is`
+    ])
+    expect(same.notices).toEqual([])
+    expect(more.notices).toEqual([
+      `holding 2 updates on ${theirs.key}: its claimed agent fixer is not listed, so they stay unseen until it is`
+    ])
   })
 
   it("reads reviews with a body as items too, and puts ready pull requests in the queue", () => {

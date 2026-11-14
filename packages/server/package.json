@@ -1,6 +1,6 @@
 {
   "name": "@review-desk/server",
-  "version": "0.6.1",
+  "version": "0.6.3",
   "private": true,
   "bin": {
     "review-desk": "src/main.ts"

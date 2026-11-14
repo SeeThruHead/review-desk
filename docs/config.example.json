@@ -47,7 +47,7 @@
   ],
   "roundLimit": 3,
   "intakeLabel": "agent-review",
-  "pollSeconds": 60,
+  "pollSeconds": 30,
   "port": 4790,
   "sidediff": {
     "checkouts": {

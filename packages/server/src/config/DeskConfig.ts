@@ -24,6 +24,8 @@ export const areaAgent = (area: Area): string => ("agent" in area ? area.agent :
 
 export const Role = Schema.Literals(["author", "reviewer"])
 
+export const defaultPollSeconds = 30
+
 export const DeskSettings = Schema.Struct({
   desk: Login,
   aliases: Schema.Array(Login),
@@ -34,7 +36,7 @@ export const DeskSettings = Schema.Struct({
   areas: Schema.Array(Area),
   roundLimit: Schema.Int,
   intakeLabel: Schema.String,
-  pollSeconds: Schema.Int,
+  pollSeconds: Schema.Int.pipe(Schema.withDecodingDefaultKey(Effect.succeed(defaultPollSeconds))),
   port: Schema.Int,
   sidediff: Schema.NullOr(Schema.Struct({ checkouts: Schema.Record(Schema.String, Schema.String) })),
   github: Schema.Struct({

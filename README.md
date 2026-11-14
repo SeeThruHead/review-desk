@@ -88,6 +88,7 @@ On Linux, Waybar can poll `review-desk summary`, which prints the summary as JSO
 - `hosts` (optional): which hosts to ask, by name: `herdr`, `hc`, `cmux`, `orca`, `rex`, `tmux`, `claude` and any plugin's. Without it every host is asked, and one that is not installed is simply skipped.
 - `plugins` (optional): host plugins with fixed arguments, as `{ "name": …, "command": [...] }`, besides the executables in `~/.review-desk/plugins/` ([docs/host-plugins.md](docs/host-plugins.md)).
 - `agentCommands` (optional): more program names that count as an agent in a tmux pane or a Rex block, on top of `claude`, `codex`, `opencode`, `gemini`, `pi`, `amp`, `aider` and `cursor-agent`.
-- `roundLimit`, `intakeLabel`, `pollSeconds`, `port`.
+- `roundLimit`, `intakeLabel`, `port`.
+- `pollSeconds` (optional): how often the desk polls, 30 seconds by default. ETag requests keep this cheap: a desk uses a few GitHub calls an hour out of 5,000.
 - `sidediff.checkouts`: where to open pull requests in sidediff.
 - `github.tokenCommand` (for example `["gh", "auth", "token"]`). A token from your own account shares that account's hourly limits with everything else you run; to give the desk its own, use a token for a separate identity (a GitHub App installation or a machine account) and set `github.login` to your login, so the searches look for you instead of `@me`. and `gitea.url` / `gitea.tokenFile` (a token with `write:issue` and `write:repository`). `gitea.discoverOwned: true` also watches every repository on Gitea owned by the desk's logins, so new ones need no config change.

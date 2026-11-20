@@ -1,5 +1,5 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun"
-import { type AgentRow, CommentOutcome, DeskRpcs, Summary } from "@review-desk/contract/Contract.ts"
+import { type AgentRow, DeskRpcs, Summary } from "@review-desk/contract/Contract.ts"
 import { Role, Verdict } from "@review-desk/contract/Board.ts"
 import { Login, PrKey, RepoSlug, SessionName, Text } from "@review-desk/contract/Ids.ts"
 import { Cause, Config, Console, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
@@ -10,6 +10,7 @@ import packageJson from "../package.json" with { type: "json" }
 import { callerAddress } from "./agents/Address.ts"
 import { Agents } from "./agents/Agents.ts"
 import { ClaudeSession } from "./agents/hosts/Claude.ts"
+import { commentCommand } from "./cli/Comment.ts"
 import { DeskConfig } from "./config/DeskConfig.ts"
 import { Desk } from "./desk/Desk.ts"
 import { ForgesLive } from "./forge/Forges.ts"
@@ -49,41 +50,7 @@ const serve = Command.make("serve", {}, () => Layer.launch(ServerLive)).pipe(
   Command.withDescription("Run the desk: poll, route, deliver and serve the board")
 )
 
-const comment = Command.make(
-  "comment",
-  {
-    key,
-    body: Flag.String("body").pipe(Flag.withDescription("What to say")),
-    replyTo: Flag.String("reply-to").pipe(
-      Flag.withDescription("The comment id to answer in its thread"),
-      Flag.optional
-    ),
-    path: Flag.String("path").pipe(Flag.withDescription("File for a new inline comment"), Flag.optional),
-    line: Flag.Int("line").pipe(Flag.withDescription("Line for a new inline comment"), Flag.optional),
-    outcome: Flag.Literals("outcome", CommentOutcome.literals).pipe(
-      Flag.withDescription("Settle the thread"),
-      Flag.withDefault("open")
-    ),
-    close: Flag.Boolean("close").pipe(
-      Flag.withDescription("On an issue, close it after the comment"),
-      Flag.withDefault(false)
-    )
-  },
-  Effect.fn(function* (input) {
-    const posted = yield* withDesk((client) =>
-      client.PostComment({
-        key: input.key,
-        body: Text.make(input.body),
-        outcome: input.outcome,
-        replyTo: Option.getOrNull(Option.map(input.replyTo, Text.make)),
-        path: Option.getOrNull(Option.map(input.path, Text.make)),
-        line: Option.getOrNull(input.line),
-        close: input.close
-      })
-    )
-    yield* Console.log(`posted ${posted.url}`)
-  })
-).pipe(Command.withDescription("Post a comment through the desk, with the agent label and the round"))
+const comment = commentCommand((request) => withDesk((client) => client.PostComment(request)))
 
 const triage = Command.make(
   "triage",

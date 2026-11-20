@@ -67,6 +67,22 @@ The hidden marker says which side wrote it, the round and whether it settles the
 
 Old marker versions must keep parsing; the marker only grows.
 
+`review-desk comment --directed` is only for a reply the person read and approved before it was posted. It swaps the agent label for the person's own approved format and adds an empty `Human comment:` section for them, while keeping the marker, so the reply still counts toward the rounds:
+
+```
+> [!NOTE]
+> AI-formatted, real-human-directed
+
+the reply
+
+<!-- review-desk v1 side=author round=2 outcome=answered desk=dana -->
+
+---
+**Human comment:**
+```
+
+On an issue it is the same without the marker. Agents never pass `--directed` on their own: a reply nobody approved keeps the agent label.
+
 ## Trust
 
 The config lists the repositories and the people the desk trusts. Nothing from anywhere else reaches an agent: it shows on the board, marked untrusted, and that is all (`packages/domain/src/Trust.ts`, enforced in `Plan.ts`, property-tested). Everything that does reach an agent is framed as data to review, never instructions.

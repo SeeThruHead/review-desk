@@ -29,9 +29,21 @@ export const isFromAgent = (body: string): boolean => Option.isSome(markerOf(bod
 const labelFor = (side: Side, owner: string): string =>
   side === "reviewer" ? `AI agent review, not yet read by ${owner}` : `AI agent reply, not yet read by ${owner}`
 
-export type Stamp = { readonly marker: Marker; readonly owner: string; readonly limit: number }
+export type Stamp = {
+  readonly marker: Marker
+  readonly owner: string
+  readonly limit: number
+  readonly directed?: boolean
+}
 
-export const stamp = (input: Stamp, body: string): Text =>
+const directedLabel = ["> [!NOTE]", "> AI-formatted, real-human-directed", ""]
+
+const humanComment = ["---", "**Human comment:**", ""]
+
+const markerLine = (marker: Marker): string =>
+  `<!-- review-desk v1 side=${marker.side} round=${marker.round} outcome=${marker.outcome} desk=${marker.desk} -->`
+
+const agentStamp = (input: Stamp, body: string): Text =>
   Text.make(
     [
       "> [!NOTE]",
@@ -40,22 +52,36 @@ export const stamp = (input: Stamp, body: string): Text =>
       "",
       body.trim(),
       "",
-      `<!-- review-desk v1 side=${input.marker.side} round=${input.marker.round} outcome=${input.marker.outcome} desk=${input.marker.desk} -->`
+      markerLine(input.marker)
     ].join("\n")
   )
 
-export const issueStamp = (owner: string, body: string): Text =>
+const directedStamp = (input: Stamp, body: string): Text =>
+  Text.make([...directedLabel, body.trim(), "", markerLine(input.marker), "", ...humanComment].join("\n"))
+
+export const stamp = (input: Stamp, body: string): Text =>
+  input.directed === true ? directedStamp(input, body) : agentStamp(input, body)
+
+const agentIssueStamp = (owner: string, body: string): Text =>
   Text.make(
     ["> [!NOTE]", `> AI agent reply, not yet read by ${owner}`, "> Review Desk, on an issue", "", body.trim()].join(
       "\n"
     )
   )
 
+const directedIssueStamp = (body: string): Text =>
+  Text.make([...directedLabel, body.trim(), "", ...humanComment].join("\n"))
+
+export const issueStamp = (owner: string, body: string, options: { readonly directed?: boolean } = {}): Text =>
+  options.directed === true ? directedIssueStamp(body) : agentIssueStamp(owner, body)
+
+const isFrame = (line: string): boolean => line.startsWith(">") || line === "---" || line === "**Human comment:**"
+
 export const plainText = (body: string): string =>
   body
     .replace(/<!--[\s\S]*?-->/g, " ")
     .split("\n")
-    .filter((line) => !line.startsWith(">"))
+    .filter((line) => !isFrame(line))
     .join(" ")
     .replace(/\s+/g, " ")
     .trim()

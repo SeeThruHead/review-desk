@@ -553,7 +553,11 @@ export class Desk extends Context.Service<
         const failed = (error: { readonly message: string }) =>
           new PostFailed({ key: request.key, reason: Text.make(error.message) })
         const url = yield* client
-          .commentOnIssue(parts.repo, parts.number, issueStamp(config.owner, request.body))
+          .commentOnIssue(
+            parts.repo,
+            parts.number,
+            issueStamp(config.owner, request.body, { directed: request.directed === true })
+          )
           .pipe(Effect.mapError(failed))
         yield* request.close === true
           ? client.closeIssue(parts.repo, parts.number).pipe(Effect.mapError(failed))
@@ -619,7 +623,8 @@ export class Desk extends Context.Service<
           {
             marker: { side, round: Count.make(round), outcome: request.outcome, desk: Login.make(config.desk) },
             owner: config.owner,
-            limit: config.roundLimit
+            limit: config.roundLimit,
+            directed: request.directed === true
           },
           request.body
         )

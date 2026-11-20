@@ -62,7 +62,7 @@ cd packages/server && bun run desk serve
 
 Open http://127.0.0.1:4790. For the menu bar, build the tray (`cd tray && cargo build --release`) and run it with `REVIEW_DESK_SERVER` set to a compiled `review-desk` (`cd packages/server && bun run compile`); it starts and restarts the server itself.
 
-Agents use the same binary: `review-desk comment`, `review-desk triage` and `review-desk claim`. The brief the desk sends them explains how. A claim whose agent has been gone for `claimGraceMinutes` (default 30) is released by the desk, so a closed pane never holds work.
+Agents use the same binary: `review-desk comment`, `review-desk triage` and `review-desk claim`. The brief the desk sends them explains how. Add `--directed` to `review-desk comment` only for a reply you read and approved: it is labelled `AI-formatted, real-human-directed` with an empty `Human comment:` section instead of the agent label, and still counts toward the rounds. A claim whose agent has been gone for `claimGraceMinutes` (default 30) is released by the desk, so a closed pane never holds work.
 
 ## SketchyBar
 

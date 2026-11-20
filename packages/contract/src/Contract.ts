@@ -89,7 +89,8 @@ export const CommentRequest = Schema.Struct({
   replyTo: Schema.NullOr(Text),
   path: Schema.NullOr(Text),
   line: Schema.NullOr(Schema.Int),
-  close: Schema.optionalKey(Schema.Boolean)
+  close: Schema.optionalKey(Schema.Boolean),
+  directed: Schema.optionalKey(Schema.Boolean)
 })
 export type CommentRequest = typeof CommentRequest.Type
 

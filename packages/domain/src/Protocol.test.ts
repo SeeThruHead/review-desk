@@ -55,6 +55,35 @@ describe("the desk-to-desk comment protocol", () => {
     expect(settledOutcome("dropped")).toEqual(Option.some("dropped"))
   })
 
+  it("labels a directed comment in the owner's approved format, keeping the marker so it counts as a round", () => {
+    const marker: Marker = { side: "author", round: Count.make(2), outcome: "answered", desk: Login.make("lee") }
+    const body = stamp({ marker, owner: "Lee", limit: 3, directed: true }, "  Kept the retry, see the test  ")
+
+    expect(body).toBe(
+      [
+        "> [!NOTE]",
+        "> AI-formatted, real-human-directed",
+        "",
+        "Kept the retry, see the test",
+        "",
+        "<!-- review-desk v1 side=author round=2 outcome=answered desk=lee -->",
+        "",
+        "---",
+        "**Human comment:**",
+        ""
+      ].join("\n")
+    )
+    expect(markerOf(body)).toEqual(Option.some(marker))
+    expect(body).not.toContain("not yet read")
+    expect(plainText(body)).toBe("Kept the retry, see the test")
+  })
+
+  it("labels a directed reply on an issue exactly as the owner's format, with no marker", () => {
+    expect(issueStamp("Dana", "  Fixed in abc123  ", { directed: true })).toBe(
+      "> [!NOTE]\n> AI-formatted, real-human-directed\n\nFixed in abc123\n\n---\n**Human comment:**\n"
+    )
+  })
+
   it("labels an agent's reply on an issue without a round", () => {
     expect(issueStamp("Dana", "  Fixed in abc123  ")).toBe(
       "> [!NOTE]\n> AI agent reply, not yet read by Dana\n> Review Desk, on an issue\n\nFixed in abc123"
